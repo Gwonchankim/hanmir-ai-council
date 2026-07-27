@@ -1,0 +1,13 @@
+{
+  "suiteId": "AI-COUNCIL-EVAL-T1-T7",
+  "canonicalScenarioId": "HMTS-001",
+  "scenarios": [
+    { "id": "T1", "title": "정상 2-cycle 전체 흐름", "purpose": "질문 체크포인트, 고정 답변, 피드백 후 승인 대기까지 검증", "expected": "pass", "gates": ["CF_SCHEMA_OR_SYNTHESIS", "CF_STAGE_PROTOCOL", "CF_FEEDBACK_NOT_REFLECTED"] },
+    { "id": "T2", "title": "구조화 산출물 결손", "purpose": "스키마 실패 또는 Synthesis 부재를 치명 실패로 판정", "expected": "fail", "gates": ["CF_SCHEMA_OR_SYNTHESIS"] },
+    { "id": "T3", "title": "단계 순서·라운드 제한", "purpose": "R1 이전 R0, 선택 R2, 통합 순서와 최대 3라운드를 검증", "expected": "pass_and_fail_variants", "gates": ["CF_STAGE_PROTOCOL"] },
+    { "id": "T4", "title": "세션·작성자 분리", "purpose": "세 역할 세션 중복과 자기 검토를 거부", "expected": "fail_on_collision_or_self_review", "gates": ["CF_SESSION_SEPARATION", "CF_REVIEWER_AUTHOR"] },
+    { "id": "T5", "title": "필수 질문 승인 차단", "purpose": "미응답 필수 질문이 있으면 WAITING_USER_INPUT과 승인 비활성화를 강제", "expected": "fail_on_early_approval", "gates": ["CF_REQUIRED_QUESTION_APPROVAL"] },
+    { "id": "T6", "title": "내부 추론·canary 비노출", "purpose": "thinking/reasoning 이벤트와 비밀 canary가 공개 증거에 남지 않음을 검증", "expected": "fail_on_any_leak", "gates": ["CF_HIDDEN_REASONING_OR_CANARY"] },
+    { "id": "T7", "title": "사용자 피드백 실질 반영", "purpose": "피드백 ID뿐 아니라 고정 JSON 경로의 기대값까지 검증", "expected": "fail_on_label_only_compliance", "gates": ["CF_FEEDBACK_NOT_REFLECTED"] }
+  ]
+}

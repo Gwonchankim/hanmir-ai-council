@@ -1,0 +1,403 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+  <meta name="color-scheme" content="light">
+  <title>Hanmir AI Council · 협업 기획 스튜디오</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <a class="skip-link" href="#councilWorkspace">대화 내용으로 건너뛰기</a>
+
+  <div class="app-frame">
+    <aside id="sessionRail" class="session-rail" aria-label="채팅 세션 목록" aria-hidden="false">
+      <div class="rail-head">
+        <a class="rail-brand" href="#" aria-label="Hanmir AI Council 홈">
+          <span class="brand-mark" aria-hidden="true">AC</span>
+          <span class="rail-label">
+            <strong>AI Council</strong>
+            <small>Local studio</small>
+          </span>
+        </a>
+        <button id="toggleSessionRail" class="icon-button rail-toggle" type="button"
+                aria-expanded="true" aria-controls="sessionRailBody" title="세션 목록 접기">
+          <span aria-hidden="true">‹</span><span class="sr-only">세션 목록 접기</span>
+        </button>
+      </div>
+
+      <div id="sessionRailBody" class="rail-body">
+        <button id="newSessionBtn" class="button primary rail-new" type="button" aria-label="새 Council 세션 설정 열기">
+          <span aria-hidden="true">＋</span><span class="rail-label">새 세션</span>
+        </button>
+
+        <div class="session-tools rail-label" role="search" aria-label="세션 검색 및 범위">
+          <label class="sr-only" for="sessionSearch">세션 검색</label>
+          <input id="sessionSearch" type="search" maxlength="120" autocomplete="off"
+                 placeholder="세션 검색" aria-controls="sessionList">
+          <label class="sr-only" for="sessionScope">세션 범위</label>
+          <select id="sessionScope" aria-controls="sessionList">
+            <option value="active">진행 중</option>
+            <option value="archived">보관됨</option>
+            <option value="all">전체</option>
+          </select>
+        </div>
+
+        <div class="rail-section-head rail-label">
+          <span>Sessions</span>
+          <span id="sessionCount" class="rail-count">0</span>
+        </div>
+        <nav id="sessionList" class="session-list" aria-label="저장된 채팅 세션">
+          <p class="empty-state rail-label">저장된 세션을 불러오는 중입니다.</p>
+        </nav>
+      </div>
+
+      <div class="rail-foot rail-label">
+        <span class="privacy-dot" aria-hidden="true"></span>
+        <span>localhost · private</span>
+      </div>
+    </aside>
+    <button id="mobileSessionBackdrop" class="mobile-session-backdrop" type="button"
+            aria-label="세션 목록 닫기" tabindex="-1" hidden></button>
+
+    <div class="studio-shell">
+      <header class="topbar">
+        <div class="brand-block">
+          <p class="eyebrow">Hanmir · Local AI workspace</p>
+          <h1>Plan with a <em>council.</em></h1>
+          <p class="brand-subtitle">Orchestrator와 두 워커가 하나의 기획안을 함께 만듭니다.</p>
+        </div>
+
+        <div class="run-summary" aria-label="현재 실행 상태">
+          <div class="access-status" aria-label="접속 상태">
+            <span id="connectionBadge" class="connection-badge connecting"
+                  data-connection-state="connecting" data-testid="connection-status">연결 중</span>
+            <span id="remoteModeBadge" class="remote-mode-badge"
+                  data-remote-mode="local" data-testid="remote-mode-status">로컬 전용</span>
+          </div>
+          <span id="phasePill" class="phase-pill" data-phase="ready">준비</span>
+          <dl class="run-meta">
+            <div><dt>Round</dt><dd id="roundValue">0</dd></div>
+            <div><dt>Cycle</dt><dd id="cycleValue">0</dd></div>
+            <div><dt>Plan</dt><dd id="planVersionValue">-</dd></div>
+          </dl>
+        </div>
+      </header>
+
+      <div id="globalError" class="global-error hidden" role="alert" tabindex="-1"></div>
+
+      <nav id="mobileWorkspaceNav" class="mobile-workspace-nav" aria-label="모바일 작업 영역" role="tablist">
+        <button id="mobileSessionsTab" class="mobile-workspace-tab" type="button" role="tab"
+                aria-selected="false" aria-controls="sessionRail" data-mobile-view="sessions">
+          <span aria-hidden="true">☰</span><span>세션</span>
+        </button>
+        <button id="mobileChatTab" class="mobile-workspace-tab" type="button" role="tab"
+                aria-selected="true" aria-controls="councilConversationPanel" data-mobile-view="chat">
+          <span aria-hidden="true">◯</span><span>채팅</span>
+        </button>
+        <button id="mobileInsightsTab" class="mobile-workspace-tab" type="button" role="tab"
+                aria-selected="false" aria-controls="inspectorPanel" data-mobile-view="insights">
+          <span aria-hidden="true">◇</span><span>인사이트</span>
+        </button>
+      </nav>
+
+      <section class="setup-panel" aria-labelledby="setupTitle">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Session setup</p>
+            <h2 id="setupTitle">Council 구성</h2>
+          </div>
+          <button id="toggleSetup" class="button ghost compact" type="button"
+                  aria-expanded="false" aria-controls="setupBody">설정 펼치기</button>
+        </div>
+
+        <div id="setupBody" class="setup-body hidden">
+          <div class="config-grid">
+            <fieldset class="config-card orchestrator-card">
+              <legend>Orchestrator</legend>
+              <p>지시를 해석하고 Harness를 설계한 뒤 결과를 통합합니다.</p>
+
+              <label for="orcBrain">두뇌</label>
+              <select id="orcBrain" name="orchestratorBrain">
+                <option value="claude">Claude</option>
+                <option value="codex">ChatGPT (Codex)</option>
+              </select>
+
+              <label for="orcModel">모델</label>
+              <select id="orcModel" name="orchestratorModel"></select>
+
+              <label for="orcEffort">Effort</label>
+              <select id="orcEffort" name="orchestratorEffort"></select>
+            </fieldset>
+
+            <fieldset class="config-card claude-card">
+              <legend>Claude 워커</legend>
+              <p>독립 초안과 Codex 초안의 교차 비평을 맡습니다.</p>
+
+              <label for="clModel">모델</label>
+              <select id="clModel" name="claudeModel"></select>
+
+              <label for="clEffort">Effort</label>
+              <select id="clEffort" name="claudeEffort"></select>
+            </fieldset>
+
+            <fieldset class="config-card codex-card">
+              <legend>ChatGPT 워커</legend>
+              <p>독립 초안과 Claude 초안의 교차 비평을 맡습니다.</p>
+
+              <label for="cxModel">모델</label>
+              <select id="cxModel" name="codexModel"></select>
+
+              <label for="cxEffort">Effort</label>
+              <select id="cxEffort" name="codexEffort"></select>
+            </fieldset>
+          </div>
+
+          <div class="setup-actions">
+            <button id="applySession" class="button primary" type="button">이 설정으로 새 세션 시작</button>
+            <p id="configHint" class="helper-text">새 세션을 시작하면 현재 상태를 보관하고 별도 세션을 만듭니다.</p>
+          </div>
+        </div>
+      </section>
+
+      <div class="workspace-grid">
+        <div id="councilConversationPanel" class="conversation-column" role="tabpanel" aria-labelledby="mobileChatTab">
+          <main id="councilWorkspace" class="workspace" tabindex="-1">
+            <section class="user-stream" aria-labelledby="userStreamTitle">
+              <div class="lane-heading user-heading">
+                <div>
+                  <span class="lane-symbol user-symbol" aria-hidden="true">U</span>
+                  <div>
+                    <p class="tag-label">Direction</p>
+                    <h2 id="userStreamTitle">사용자 지시와 피드백</h2>
+                  </div>
+                </div>
+                <span id="userCount" class="message-count" aria-label="사용자 메시지 수">0</span>
+              </div>
+              <div id="userMessages" class="user-messages" aria-live="polite">
+                <p class="empty-state">아직 입력한 지시가 없습니다.</p>
+              </div>
+            </section>
+
+            <section class="activity-panel" aria-labelledby="activityTitle">
+              <div class="activity-copy">
+                <p class="tag-label">Live progress</p>
+                <h2 id="activityTitle">현재 진행</h2>
+                <p id="ticker" role="status" aria-live="polite">세션 설정 후 지시를 입력하세요.</p>
+              </div>
+              <ol id="activityLog" class="activity-log" aria-label="단계 기록"></ol>
+            </section>
+
+            <section class="council-grid" aria-label="AI Council 에이전트 대화">
+              <article class="agent-lane orchestrator-lane" aria-labelledby="orchestratorLaneTitle">
+                <header class="lane-heading">
+                  <div>
+                    <span class="lane-symbol orchestrator-symbol" aria-hidden="true">O</span>
+                    <div><p class="tag-label">Director</p><h2 id="orchestratorLaneTitle">Orchestrator</h2></div>
+                  </div>
+                  <span id="orchestratorCount" class="message-count" aria-label="Orchestrator 메시지 수">0</span>
+                </header>
+                <div id="orchestratorMessages" class="lane-messages" aria-live="polite">
+                  <p class="empty-state">과업 배분, Harness 변경, 통합 결과가 표시됩니다.</p>
+                </div>
+              </article>
+
+              <article class="agent-lane claude-lane" aria-labelledby="claudeLaneTitle">
+                <header class="lane-heading">
+                  <div>
+                    <span class="lane-symbol claude-symbol" aria-hidden="true">C</span>
+                    <div><p class="tag-label">Worker 01</p><h2 id="claudeLaneTitle">Claude</h2></div>
+                  </div>
+                  <span id="claudeCount" class="message-count" aria-label="Claude 메시지 수">0</span>
+                </header>
+                <div id="claudeMessages" class="lane-messages" aria-live="polite">
+                  <p class="empty-state">Claude의 공개 초안과 비평이 표시됩니다.</p>
+                </div>
+              </article>
+
+              <article class="agent-lane codex-lane" aria-labelledby="codexLaneTitle">
+                <header class="lane-heading">
+                  <div>
+                    <span class="lane-symbol codex-symbol" aria-hidden="true">G</span>
+                    <div><p class="tag-label">Worker 02</p><h2 id="codexLaneTitle">ChatGPT</h2></div>
+                  </div>
+                  <span id="codexCount" class="message-count" aria-label="ChatGPT 메시지 수">0</span>
+                </header>
+                <div id="codexMessages" class="lane-messages" aria-live="polite">
+                  <p class="empty-state">ChatGPT의 공개 초안과 비평이 표시됩니다.</p>
+                </div>
+              </article>
+            </section>
+
+            <section id="artifactSection" class="artifact-section hidden" aria-labelledby="artifactTitle">
+              <div class="section-heading artifact-heading">
+                <div>
+                  <p class="eyebrow">Validated output</p>
+                  <h2 id="artifactTitle">구조화 산출물</h2>
+                </div>
+                <span id="artifactCount" class="message-count">0</span>
+              </div>
+              <div id="artifactList" class="artifact-list"></div>
+            </section>
+
+            <section id="questionPanel" class="question-panel hidden" aria-labelledby="questionTitle">
+              <div class="question-head">
+                <div>
+                  <p class="eyebrow">User checkpoint</p>
+                  <h2 id="questionTitle">사용자 확인 질문</h2>
+                </div>
+                <span id="questionSummary" class="question-summary"></span>
+              </div>
+              <div class="question-columns">
+                <div><h3>필수 질문</h3><ol id="requiredQuestions"></ol></div>
+                <div><h3>선택 질문</h3><ol id="optionalQuestions"></ol></div>
+              </div>
+            </section>
+          </main>
+
+          <footer class="composer" aria-label="사용자 입력">
+            <div class="action-row">
+              <div class="checkpoint-copy">
+                <strong id="actionTitle">새 지시</strong>
+                <span id="actionDescription">Council이 함께 검토할 과업을 입력하세요.</span>
+              </div>
+              <div class="checkpoint-buttons">
+                <button id="feedbackMode" class="button ghost hidden" type="button">피드백 작성</button>
+                <button id="retryBtn" class="button warning hidden" type="button">실패 단계 재시도</button>
+                <button id="cancelBtn" class="button danger hidden" type="button">현재 실행 취소</button>
+                <button id="approveBtn" class="button primary hidden" type="button">기획안 승인</button>
+              </div>
+            </div>
+
+            <label id="inputLabel" for="input" class="sr-only">사용자 지시</label>
+            <div class="input-row">
+              <textarea id="input" rows="3" aria-describedby="inputHint"
+                        placeholder="Council에게 무엇을 기획할지 지시하세요…"></textarea>
+              <button id="sendBtn" class="send-button" type="button" aria-label="지시 보내기" title="지시 보내기">
+                <span aria-hidden="true">↑</span>
+              </button>
+            </div>
+            <p id="inputHint" class="helper-text">Enter로 전송 · Shift+Enter로 줄바꿈</p>
+          </footer>
+        </div>
+
+        <aside id="inspectorPanel" class="inspector-panel" aria-label="Council 수행 기록과 Harness"
+               role="tabpanel" aria-labelledby="mobileInsightsTab" tabindex="-1">
+          <div class="inspector-head">
+            <div><p class="eyebrow">Council record</p><h2>Work ledger</h2></div>
+            <button id="expandAllInspector" class="text-link" type="button">모두 펼치기 ↗</button>
+          </div>
+
+          <section class="inspector-section" aria-labelledby="summaryTitle">
+            <div class="inspector-section-title">
+              <div><span>01</span><h3 id="summaryTitle">수행 내용 요약</h3></div>
+              <small>실시간 기록</small>
+            </div>
+            <div id="summaryList" class="summary-list">
+              <details class="ledger-item" open data-role="orchestrator">
+                <summary><span>Orchestrator</span><small id="orchestratorSummaryMeta">대기 중</small></summary>
+                <div id="orchestratorSummary" class="ledger-body"><p>아직 수행 기록이 없습니다.</p></div>
+              </details>
+              <details class="ledger-item" data-role="claude">
+                <summary><span>Claude</span><small id="claudeSummaryMeta">대기 중</small></summary>
+                <div id="claudeSummary" class="ledger-body"><p>아직 수행 기록이 없습니다.</p></div>
+              </details>
+              <details class="ledger-item" data-role="codex">
+                <summary><span>ChatGPT</span><small id="codexSummaryMeta">대기 중</small></summary>
+                <div id="codexSummary" class="ledger-body"><p>아직 수행 기록이 없습니다.</p></div>
+              </details>
+            </div>
+          </section>
+
+          <section class="inspector-section harness-section" aria-labelledby="harnessTitle">
+            <div class="inspector-section-title">
+              <div><span>02</span><h3 id="harnessTitle">Agent Harness</h3></div>
+              <small id="harnessStatus">지시 후 생성</small>
+            </div>
+            <p class="inspector-intro">Orchestrator가 업무에 맞춰 작성하고 진행 중에도 개정합니다. 직접 편집한 내용은 다음 호출부터 적용됩니다.</p>
+            <div id="harnessList" class="harness-list">
+              <details class="ledger-item harness-item" open data-harness-role="orchestrator">
+                <summary><span>Orchestrator Harness</span><small id="orchestratorHarnessVersion">v0</small></summary>
+                <div class="ledger-body">
+                  <label for="orchestratorHarness">업무 수행 규칙</label>
+                  <textarea id="orchestratorHarness" rows="9" placeholder="첫 지시를 받으면 Orchestrator가 Harness를 작성합니다."></textarea>
+                  <div class="harness-actions">
+                    <span id="orchestratorHarnessMeta" class="helper-text">생성 전</span>
+                    <button class="button ghost compact save-harness" type="button" data-role="orchestrator">수정 저장</button>
+                  </div>
+                </div>
+              </details>
+              <details class="ledger-item harness-item" data-harness-role="claudeWorker">
+                <summary><span>Claude Harness</span><small id="claudeWorkerHarnessVersion">v0</small></summary>
+                <div class="ledger-body">
+                  <label for="claudeWorkerHarness">업무 수행 규칙</label>
+                  <textarea id="claudeWorkerHarness" rows="9" placeholder="첫 지시를 받으면 Orchestrator가 Harness를 작성합니다."></textarea>
+                  <div class="harness-actions">
+                    <span id="claudeWorkerHarnessMeta" class="helper-text">생성 전</span>
+                    <button class="button ghost compact save-harness" type="button" data-role="claudeWorker">수정 저장</button>
+                  </div>
+                </div>
+              </details>
+              <details class="ledger-item harness-item" data-harness-role="codexWorker">
+                <summary><span>ChatGPT Harness</span><small id="codexWorkerHarnessVersion">v0</small></summary>
+                <div class="ledger-body">
+                  <label for="codexWorkerHarness">업무 수행 규칙</label>
+                  <textarea id="codexWorkerHarness" rows="9" placeholder="첫 지시를 받으면 Orchestrator가 Harness를 작성합니다."></textarea>
+                  <div class="harness-actions">
+                    <span id="codexWorkerHarnessMeta" class="helper-text">생성 전</span>
+                    <button class="button ghost compact save-harness" type="button" data-role="codexWorker">수정 저장</button>
+                  </div>
+                </div>
+              </details>
+            </div>
+
+            <details id="harnessHistoryPanel" class="ledger-item harness-history">
+              <summary>
+                <span>Revision history</span>
+                <small id="harnessHistoryMeta">이력 확인</small>
+              </summary>
+              <div class="ledger-body">
+                <p class="history-intro">이전 Harness와 현재 설정의 차이를 확인하고, 필요한 범위만 새 revision으로 복원합니다. 직접 수정해 고정된 필드는 유지됩니다.</p>
+                <div id="harnessRevisionList" class="revision-list" aria-label="Harness revision 목록">
+                  <p class="empty-state">저장된 revision을 불러오는 중입니다.</p>
+                </div>
+
+                <div class="harness-diff-controls" aria-label="Harness revision 비교 설정">
+                  <label for="harnessDiffFrom">기준
+                    <select id="harnessDiffFrom" aria-describedby="harnessDiffStatus">
+                      <option value="">이전 revision</option>
+                    </select>
+                  </label>
+                  <label for="harnessDiffTo">비교 대상
+                    <select id="harnessDiffTo" aria-describedby="harnessDiffStatus">
+                      <option value="current">현재</option>
+                    </select>
+                  </label>
+                  <label for="harnessDiffRole">범위
+                    <select id="harnessDiffRole" aria-describedby="harnessDiffStatus">
+                      <option value="all">전체 Harness</option>
+                      <option value="orchestrator">Orchestrator</option>
+                      <option value="claudeWorker">Claude</option>
+                      <option value="codexWorker">ChatGPT</option>
+                    </select>
+                  </label>
+                  <button id="loadHarnessDiff" class="button ghost compact" type="button">차이 보기</button>
+                </div>
+
+                <div id="harnessDiffStatus" class="diff-status" role="status" aria-live="polite">비교할 revision을 선택하세요.</div>
+                <div id="harnessDiffOutput" class="harness-diff-output" aria-label="Harness 변경 내용"></div>
+                <div class="harness-rollback-actions">
+                  <p id="harnessRollbackHint" class="helper-text">기준 revision을 선택하면 rollback할 수 있습니다.</p>
+                  <button id="rollbackHarness" class="button compact rollback-harness" type="button" disabled>선택 revision으로 rollback</button>
+                </div>
+              </div>
+            </details>
+          </section>
+        </aside>
+      </div>
+    </div>
+  </div>
+
+  <script src="/app.js" defer></script>
+</body>
+</html>

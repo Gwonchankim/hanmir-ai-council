@@ -1,0 +1,9 @@
+node_modules/
+data/session.json
+data/*.tmp
+data/sessions/
+data/harness-revisions/
+data/sessions-index.json
+runtime/
+.runtime/
+evaluation/runs/
