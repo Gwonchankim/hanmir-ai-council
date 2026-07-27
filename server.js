@@ -8,6 +8,7 @@ const defaultStore = require('./state');
 const defaultEngine = require('./engine');
 const { resolveClaudeBin } = require('./adapters/claude');
 const { resolveCodexBin } = require('./adapters/codex');
+const { ModelCapacityService } = require('./lib/model-capacity');
 const {
   RemoteMutationGuard,
   authenticateRequest,
@@ -44,11 +45,16 @@ function createApp({
   engine = defaultEngine,
   accessPolicy = config.access,
   accessGuardOptions = {},
+  modelCapacity = null,
 } = {}) {
   const app = express();
   const clients = new Set();
   const normalizedAccessPolicy = normalizeAccessPolicy(accessPolicy);
   const mutationGuard = new RemoteMutationGuard(normalizedAccessPolicy, accessGuardOptions);
+  const modelCapacityService = modelCapacity || new ModelCapacityService({
+    cwd: process.cwd(),
+    env: process.env,
+  });
 
   app.disable('x-powered-by');
   app.set('trust proxy', false);
@@ -207,6 +213,22 @@ function createApp({
     preflight: preflight(),
     modelReadiness: modelReadiness(),
   }));
+  app.get('/api/model-capacity', async (req, res, next) => {
+    if (req.aiCouncilAccess?.kind === 'tailscale') {
+      return res.json({
+        visibility: 'private',
+        providers: {},
+        message: '계정 사용량은 원격 화면에 표시되지 않습니다.',
+      });
+    }
+    try {
+      const force = String(req.query.refresh || '') === '1';
+      const snapshot = await modelCapacityService.refresh({ force });
+      return res.json(snapshot);
+    } catch (error) {
+      return next(error);
+    }
+  });
   app.get('/api/state', (req, res) => res.json(store.publicState()));
   app.get('/api/council/artifacts/:name', (req, res, next) => {
     try {

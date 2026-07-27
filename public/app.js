@@ -56,6 +56,8 @@ const ui = {
   configHint: byId('configHint'),
   configSummary: byId('configSummary'),
   modelGuidance: byId('modelGuidance'),
+  modelCapacity: byId('modelCapacity'),
+  refreshModelCapacity: byId('refreshModelCapacity'),
   councilMode: byId('councilMode'),
   decisionCouncilConfig: byId('decisionCouncilConfig'),
   councilPreset: byId('councilPreset'),
@@ -128,6 +130,9 @@ const ui = {
   retryBtn: byId('retryBtn'),
   cancelBtn: byId('cancelBtn'),
   approveBtn: byId('approveBtn'),
+  composer: byId('composer'),
+  composerInputArea: byId('composerInputArea'),
+  toggleComposer: byId('toggleComposer'),
   inputLabel: byId('inputLabel'),
   input: byId('input'),
   inputHint: byId('inputHint'),
@@ -245,6 +250,9 @@ const app = {
   renderedArtifacts: new Set(),
   counts: { user: 0, orchestrator: 0, claude: 0, codex: 0, artifact: 0 },
   councilRoleControls: {},
+  modelCapacity: null,
+  modelCapacityTimer: null,
+  modelCapacityLoading: false,
 };
 
 function escapeHtml(value) {
@@ -3081,6 +3089,21 @@ function updateSessionRail(expanded) {
   try { localStorage.setItem('ai-council:session-rail', expanded ? 'expanded' : 'collapsed'); } catch (_) { /* noop */ }
 }
 
+function setComposerCollapsed(collapsed, { focusInput = false } = {}) {
+  const next = Boolean(collapsed);
+  if (next && ui.composerInputArea.contains(document.activeElement)) {
+    ui.toggleComposer.focus({ preventScroll: true });
+  }
+  ui.composer.classList.toggle('is-collapsed', next);
+  ui.composerInputArea.hidden = next;
+  ui.toggleComposer.setAttribute('aria-expanded', String(!next));
+  ui.toggleComposer.textContent = next ? '입력창 펼치기' : '입력창 접기';
+  try { localStorage.setItem('ai-council:composer', next ? 'collapsed' : 'expanded'); } catch (_) { /* noop */ }
+  if (!next && focusInput && !ui.input.disabled) {
+    requestAnimationFrame(() => ui.input.focus({ preventScroll: true }));
+  }
+}
+
 function syncVisualViewport() {
   const viewport = window.visualViewport;
   const height = viewport?.height || window.innerHeight;
@@ -3101,6 +3124,8 @@ function openNewSessionSetup() {
   ui.setupBody.classList.remove('hidden');
   ui.toggleSetup.setAttribute('aria-expanded', 'true');
   ui.toggleSetup.textContent = '설정 접기';
+  loadModelCapacity({ force: !app.modelCapacity }).catch(() => {});
+  startModelCapacityPolling();
   ui.toggleSetup.scrollIntoView({ behavior: 'smooth', block: 'center' });
   ui.orcBrain.focus({ preventScroll: true });
 }
@@ -3119,6 +3144,129 @@ async function loadConfig() {
   app.options = normalizeOptions(payload);
   renderConfig();
   renderPreflight();
+}
+
+function capacityDuration(value) {
+  const timestamp = Date.parse(value || '');
+  if (!Number.isFinite(timestamp)) return '';
+  const minutes = Math.max(0, Math.ceil((timestamp - Date.now()) / 60_000));
+  if (minutes < 1) return '곧 복구';
+  const days = Math.floor(minutes / 1_440);
+  const hours = Math.floor((minutes % 1_440) / 60);
+  const rest = minutes % 60;
+  if (days) return `${days}일 ${hours}시간 후`;
+  if (hours) return `${hours}시간 ${rest}분 후`;
+  return `${rest}분 후`;
+}
+
+function capacityUpdatedAt(value) {
+  const timestamp = Date.parse(value || '');
+  if (!Number.isFinite(timestamp)) return '확인 전';
+  const minutes = Math.max(0, Math.floor((Date.now() - timestamp) / 60_000));
+  return minutes < 1 ? '방금 확인' : `${minutes}분 전 확인`;
+}
+
+function renderModelCapacity() {
+  if (!ui.modelCapacity) return;
+  ui.modelCapacity.replaceChildren();
+  const payload = app.modelCapacity;
+  if (app.modelCapacityLoading && !payload) {
+    const loading = document.createElement('p');
+    loading.className = 'helper-text';
+    loading.textContent = 'Provider 사용량을 확인하는 중입니다.';
+    ui.modelCapacity.append(loading);
+    return;
+  }
+  if (payload?.visibility === 'private') {
+    const privateNotice = document.createElement('p');
+    privateNotice.className = 'helper-text';
+    privateNotice.textContent = payload.message || '계정 사용량은 원격 화면에 표시되지 않습니다.';
+    ui.modelCapacity.append(privateNotice);
+    return;
+  }
+  const providers = payload?.providers || {};
+  const labels = { claude: 'Claude', codex: 'ChatGPT / Codex' };
+  for (const providerId of ['claude', 'codex']) {
+    const provider = providers[providerId] || { provider: providerId, state: 'unknown', windows: [], message: '사용량을 확인하지 못했습니다.' };
+    const card = document.createElement('article');
+    card.className = `capacity-provider${provider.state === 'limited' ? ' is-limited' : ''}${provider.state === 'unavailable' ? ' is-unavailable' : ''}`;
+    const name = document.createElement('div');
+    name.className = 'capacity-provider-name';
+    name.textContent = labels[providerId];
+    const meta = document.createElement('small');
+    meta.textContent = provider.source ? `${capacityUpdatedAt(provider.updatedAt)} · CLI reported` : capacityUpdatedAt(provider.updatedAt);
+    name.append(meta);
+    card.append(name);
+    const windows = document.createElement('div');
+    windows.className = 'capacity-windows';
+    const entries = Array.isArray(provider.windows) ? provider.windows.slice(0, 3) : [];
+    if (entries.length) {
+      entries.forEach((entry) => {
+        const item = document.createElement('span');
+        item.className = 'capacity-window';
+        const bar = document.createElement('span');
+        bar.className = 'capacity-bar';
+        const fill = document.createElement('span');
+        const remaining = Math.max(0, Math.min(100, Number(entry.remainingPercent)));
+        fill.style.width = `${remaining}%`;
+        bar.append(fill);
+        const label = document.createElement('span');
+        label.textContent = entry.label || '한도';
+        const amount = document.createElement('strong');
+        amount.textContent = `${remaining}% 남음`;
+        const reset = document.createElement('span');
+        reset.textContent = capacityDuration(entry.resetsAt) || entry.resetLabel || '복구 시각 미제공';
+        item.append(bar, label, amount, reset);
+        windows.append(item);
+      });
+    } else {
+      const unavailable = document.createElement('span');
+      unavailable.className = 'capacity-window';
+      unavailable.textContent = provider.message || '사용량 정보를 받을 수 없습니다.';
+      windows.append(unavailable);
+    }
+    card.append(windows);
+    const status = document.createElement('span');
+    status.className = `capacity-status${['unavailable', 'stale', 'limited'].includes(provider.state) ? ' is-warning' : ''}`;
+    if (provider.state === 'limited') status.textContent = '제한 감지';
+    else if (provider.state === 'stale') status.textContent = '이전 값';
+    else if (provider.state === 'unavailable') status.textContent = '미확인';
+    else if (Number(provider.resetCreditCount) > 0) status.textContent = `리셋 ${provider.resetCreditCount}회`;
+    else status.textContent = '사용 가능';
+    card.append(status);
+    ui.modelCapacity.append(card);
+  }
+}
+
+async function loadModelCapacity({ force = false } = {}) {
+  if (app.modelCapacityLoading) return;
+  app.modelCapacityLoading = true;
+  ui.refreshModelCapacity?.classList.add('is-loading');
+  if (ui.refreshModelCapacity) ui.refreshModelCapacity.disabled = true;
+  renderModelCapacity();
+  try {
+    app.modelCapacity = await requestJson(`/api/model-capacity${force ? '?refresh=1' : ''}`);
+  } catch (error) {
+    app.modelCapacity = {
+      visibility: 'local',
+      providers: {
+        claude: { provider: 'claude', state: 'unavailable', windows: [], message: '사용량 확인에 실패했습니다.' },
+        codex: { provider: 'codex', state: 'unavailable', windows: [], message: '사용량 확인에 실패했습니다.' },
+      },
+    };
+  } finally {
+    app.modelCapacityLoading = false;
+    ui.refreshModelCapacity?.classList.remove('is-loading');
+    if (ui.refreshModelCapacity) ui.refreshModelCapacity.disabled = false;
+    renderModelCapacity();
+  }
+}
+
+function startModelCapacityPolling() {
+  if (app.modelCapacityTimer) return;
+  app.modelCapacityTimer = window.setInterval(() => {
+    if (!document.hidden) loadModelCapacity().catch(() => {});
+  }, 60_000);
 }
 
 async function loadSecurityContext() {
@@ -3229,6 +3377,14 @@ ui.toggleSetup.addEventListener('click', () => {
   const collapsed = ui.setupBody.classList.toggle('hidden');
   ui.toggleSetup.setAttribute('aria-expanded', String(!collapsed));
   ui.toggleSetup.textContent = collapsed ? '설정 펼치기' : '설정 접기';
+  if (!collapsed) {
+    loadModelCapacity({ force: !app.modelCapacity }).catch(() => {});
+    startModelCapacityPolling();
+  }
+});
+
+ui.refreshModelCapacity?.addEventListener('click', () => {
+  loadModelCapacity({ force: true }).catch(() => {});
 });
 
 ui.orcBrain.addEventListener('change', () => refreshOrchestratorOptions());
@@ -3366,6 +3522,10 @@ ui.loadHarnessDiff.addEventListener('click', () => loadHarnessDiff().catch(() =>
 ui.rollbackHarness.addEventListener('click', rollbackHarnessRevision);
 
 ui.sendBtn.addEventListener('click', sendInput);
+ui.toggleComposer.addEventListener('click', () => {
+  const collapsed = ui.toggleComposer.getAttribute('aria-expanded') !== 'true';
+  setComposerCollapsed(!collapsed, { focusInput: collapsed });
+});
 ui.input.addEventListener('keydown', (event) => {
   if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
     event.preventDefault();
@@ -3376,7 +3536,7 @@ ui.input.addEventListener('keydown', (event) => {
 ui.feedbackMode.addEventListener('click', () => {
   app.feedbackMode = true;
   updateControls();
-  ui.input.focus();
+  setComposerCollapsed(false, { focusInput: true });
 });
 
 ui.approveBtn.addEventListener('click', () => {
@@ -3481,10 +3641,15 @@ window.addEventListener('beforeunload', (event) => {
   }
 });
 
-window.addEventListener('pagehide', () => app.eventSource?.close());
+window.addEventListener('pagehide', () => {
+  app.eventSource?.close();
+  if (app.modelCapacityTimer) window.clearInterval(app.modelCapacityTimer);
+});
 
 let railExpanded = true;
 try { railExpanded = localStorage.getItem('ai-council:session-rail') !== 'collapsed'; } catch (_) { /* noop */ }
+let composerCollapsed = false;
+try { composerCollapsed = localStorage.getItem('ai-council:composer') === 'collapsed'; } catch (_) { /* noop */ }
 renderAccessMode();
 syncVisualViewport();
 if (isMobileWorkspace()) {
@@ -3497,4 +3662,5 @@ if (isMobileWorkspace()) {
   updateSessionRail(railExpanded);
   setMobileWorkspaceView('chat', { persist: false });
 }
+setComposerCollapsed(composerCollapsed);
 initialize();

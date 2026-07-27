@@ -22,6 +22,21 @@ function fakeEngine() {
   };
 }
 
+function fakeModelCapacity() {
+  return {
+    async refresh() {
+      return {
+        visibility: 'local',
+        refreshIntervalMs: 300000,
+        providers: {
+          claude: { provider: 'claude', state: 'available', source: 'fixture', updatedAt: new Date().toISOString(), windows: [{ id: 'claude-session', label: '현재 세션', remainingPercent: 52, resetsAt: null, resetLabel: '1시간 후' }], resetCreditCount: 0 },
+          codex: { provider: 'codex', state: 'available', source: 'fixture', updatedAt: new Date().toISOString(), windows: [{ id: 'codex-primary', label: '기본 한도', remainingPercent: 65, resetsAt: null, resetLabel: '5일 후' }], resetCreditCount: 0 },
+        },
+      };
+    },
+  };
+}
+
 function buildStore(root) {
   const store = new StateStore({ snapshotPath: path.join(root, 'session.json'), autoLoad: false });
   store.get().sessionTitle = 'Archived responsive fixture';
@@ -61,7 +76,7 @@ function buildStore(root) {
 }
 
 async function startFixtureServer(store) {
-  const app = createApp({ store, engine: fakeEngine() });
+  const app = createApp({ store, engine: fakeEngine(), modelCapacity: fakeModelCapacity() });
   const server = await new Promise((resolve) => {
     const instance = app.listen(0, '127.0.0.1', () => resolve(instance));
   });
@@ -338,6 +353,40 @@ async function verifyMobileTouchAndComposer(client, profile) {
     mobile: false,
   });
   await client.evaluate("document.querySelector('#input').blur()");
+}
+
+async function verifyComposerToggle(client) {
+  const initial = await client.evaluate(`(() => ({
+    expanded: document.querySelector('#toggleComposer')?.getAttribute('aria-expanded'),
+    hidden: document.querySelector('#composerInputArea')?.hidden,
+  }))()`);
+  assert.equal(initial.expanded, 'true');
+  assert.equal(initial.hidden, false);
+
+  await client.evaluate("document.querySelector('#input').focus(); document.querySelector('#toggleComposer').click()");
+  const collapsed = await client.evaluate(`(() => ({
+    expanded: document.querySelector('#toggleComposer')?.getAttribute('aria-expanded'),
+    hidden: document.querySelector('#composerInputArea')?.hidden,
+    classApplied: document.querySelector('.composer')?.classList.contains('is-collapsed'),
+    focused: document.activeElement === document.querySelector('#toggleComposer'),
+  }))()`);
+  assert.equal(collapsed.expanded, 'false');
+  assert.equal(collapsed.hidden, true);
+  assert.equal(collapsed.classApplied, true);
+  assert.equal(collapsed.focused, true, 'collapsing must not leave focus in hidden input controls');
+
+  await client.evaluate("document.querySelector('#toggleComposer').click()");
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  const expanded = await client.evaluate(`(() => ({
+    expanded: document.querySelector('#toggleComposer')?.getAttribute('aria-expanded'),
+    hidden: document.querySelector('#composerInputArea')?.hidden,
+    classApplied: document.querySelector('.composer')?.classList.contains('is-collapsed'),
+    focused: document.activeElement === document.querySelector('#input'),
+  }))()`);
+  assert.equal(expanded.expanded, 'true');
+  assert.equal(expanded.hidden, false);
+  assert.equal(expanded.classApplied, false);
+  assert.equal(expanded.focused, true, 'expanding should make the input immediately ready to use');
 }
 
 async function verifyLongStreamOverflow(client) {
@@ -934,6 +983,10 @@ test('responsive browser regression at 375/768/1440px', { timeout: 120_000 }, as
         await setViewportAndNavigate(client, server.baseUrl, profile);
         await verifyLayout(client, profile);
         await verifyLongStreamOverflow(client);
+      });
+      await t.test(`${profile.width}px composer collapse control`, async () => {
+        await setViewportAndNavigate(client, server.baseUrl, profile);
+        await verifyComposerToggle(client);
       });
       if (profile.width <= 880) {
         await t.test(`${profile.width}px mobile drawer contract`, async () => {

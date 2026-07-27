@@ -17,7 +17,7 @@
     "test:e2e:council": "node scripts/run-decision-council-e2e.js",
     "test:e2e:council:resume": "node scripts/run-decision-council-e2e.js --resume",
     "isolation:check": "node scripts/isolation-preflight.js --profile standard-user --json",
-    "check": "node --check server.js && node --check engine.js && node --check state.js && node --check lib/access-security.js && node --check public/app.js"
+    "check": "node --check server.js && node --check engine.js && node --check state.js && node --check lib/access-security.js && node --check lib/model-capacity.js && node --check public/app.js"
   },
   "engines": {
     "node": ">=20"
