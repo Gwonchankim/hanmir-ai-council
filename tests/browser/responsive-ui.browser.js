@@ -362,6 +362,178 @@ async function verifyLongStreamOverflow(client) {
   assert.equal(result.codeInside, true, 'long inline code must remain inside its message card');
 }
 
+async function verifyWorkflowVisualization(client) {
+  await client.send('Emulation.setEmulatedMedia', {
+    features: [{ name: 'prefers-reduced-motion', value: 'no-preference' }],
+  });
+  await client.evaluate(`(() => {
+    app.workflowEvents = [];
+    app.state = { ...(app.state || {}), config: { ...(app.state?.config || {}), mode: 'planning' } };
+    app.cycle = 1;
+    app.phase = 'drafting';
+    renderWorkflowCycles();
+    [
+      {
+        id: 'cycle-1-package', cycle: 1, type: 'artifact', role: 'orchestrator',
+        phase: 'dispatching', artifactType: 'task_package',
+        artifact: { artifactType: 'task_package', summary: '두 Agent에 전달할 과업을 정리했습니다.' }
+      },
+      {
+        id: 'cycle-1-claude', cycle: 1, type: 'status', role: 'claude',
+        logicalRole: 'claudeWorker', phase: 'drafting', artifactType: 'draft',
+        modelRoute: { brain: 'claude', model: 'haiku', effort: 'low' },
+        message: 'Claude 초안 작성 중'
+      },
+      {
+        id: 'cycle-1-codex', cycle: 1, type: 'status', role: 'codex',
+        logicalRole: 'codexWorker', phase: 'drafting', artifactType: 'draft',
+        modelRoute: { brain: 'codex', model: 'gpt-5.4', effort: 'low' },
+        message: 'ChatGPT 초안 작성 중'
+      }
+    ].forEach((event) => handleEvent(event));
+  })()`);
+  await new Promise((resolve) => setTimeout(resolve, 120));
+  let state = await client.evaluate(`(() => {
+    const cycle = document.querySelector('.workflow-cycle[data-cycle="1"]');
+    const rect = (key) => {
+      const value = cycle.querySelector('[data-workflow-node="' + key + '"]').getBoundingClientRect();
+      return { top: value.top, bottom: value.bottom, left: value.left, right: value.right };
+    };
+    const claude = cycle.querySelector('[data-workflow-node="claude"]');
+    return {
+      open: cycle.open,
+      orchestrator: rect('orchestrator'),
+      claude: rect('claude'),
+      codex: rect('codex'),
+      synthesis: rect('synthesis'),
+      claudeState: claude.dataset.workflowState,
+      codexState: cycle.querySelector('[data-workflow-node="codex"]').dataset.workflowState,
+      borderAnimation: getComputedStyle(claude, '::before').animationName,
+      flowing: cycle.querySelectorAll('.workflow-cycle-connector.is-flowing').length,
+      modelText: cycle.textContent,
+      followLabel: document.querySelector('#workflowFollowLabel').textContent,
+      followPressed: document.querySelector('#workflowFollow').getAttribute('aria-pressed'),
+    };
+  })()`);
+  assert.equal(state.open, true);
+  assert.ok(state.orchestrator.bottom < state.claude.top, 'cycle Orchestrator must sit above workers');
+  assert.ok(state.claude.right <= state.codex.left + 1, 'planning workers must sit side by side');
+  assert.ok(state.synthesis.top > state.claude.bottom, 'cycle synthesis must sit below workers');
+  assert.equal(state.claudeState, 'active');
+  assert.equal(state.codexState, 'active');
+  assert.ok(state.flowing >= 1);
+  assert.match(state.borderAnimation, /workflow-border-counterclockwise/);
+  assert.match(state.modelText, /Claude · haiku/);
+  assert.match(state.modelText, /ChatGPT · gpt-5.4/);
+  assert.equal(state.followPressed, 'true');
+  assert.match(state.followLabel, /자동 추적/);
+
+  await client.evaluate(`handleEvent({
+    id: 'cycle-1-synthesis', cycle: 1, type: 'artifact', role: 'orchestrator',
+    phase: 'synthesizing', artifactType: 'synthesis',
+    artifact: {
+      artifactType: 'synthesis',
+      executiveSummary: 'Cycle 1 Workflow 종합 결과입니다.'
+    }
+  })`);
+  await client.evaluate(`handleEvent({
+    id: 'cycle-2-user', cycle: 2, type: 'user', role: 'user',
+    phase: 'dispatching', message: '두 번째 Cycle 피드백'
+  })`);
+  state = await client.evaluate(`(() => ({
+    firstOpen: document.querySelector('.workflow-cycle[data-cycle="1"]').open,
+    secondOpen: document.querySelector('.workflow-cycle[data-cycle="2"]').open,
+    cycleCount: document.querySelectorAll('.workflow-cycle').length,
+    firstText: document.querySelector('.workflow-cycle[data-cycle="1"]').textContent,
+  }))()`);
+  assert.equal(state.firstOpen, false, 'previous cycles should collapse');
+  assert.equal(state.secondOpen, true, 'latest cycle should remain expanded');
+  assert.equal(state.cycleCount, 2);
+  assert.match(state.firstText, /Cycle 1 Workflow 종합 결과/);
+
+  await client.evaluate(`(() => {
+    app.workflowEvents = [];
+    app.state.config.mode = 'decision_council';
+    app.cycle = 3;
+    app.phase = 'anonymous_peer_review';
+    const advisors = ['contrarian', 'firstPrinciples', 'expansionist', 'outsider', 'executor'];
+    handleEvent({
+      id: 'dc-frame', cycle: 3, type: 'artifact', role: 'orchestrator',
+      logicalRole: 'councilFramer', phase: 'framing', artifactType: 'decision_frame',
+      artifact: { artifactType: 'decision_frame', decision: 'A 또는 B를 선택한다.' }
+    });
+    advisors.slice(0, 3).forEach((advisor, index) => handleEvent({
+      id: 'dc-analysis-' + advisor, cycle: 3, type: 'artifact',
+      role: index % 2 ? 'codex' : 'claude', logicalRole: 'councilAdvisor:' + advisor,
+      phase: 'independent_analysis', artifactType: 'advisor_analysis',
+      modelRoute: { brain: index % 2 ? 'codex' : 'claude', model: index % 2 ? 'gpt-5.4' : 'haiku', effort: 'low' },
+      usage: { input_tokens: 100, output_tokens: 20 },
+      artifact: {
+        artifactType: 'advisor_analysis', advisor,
+        headline: '독립 결론 ' + (index + 1),
+        assessment: '전제와 선택지를 검토했습니다.',
+        recommendation: '작은 검증을 먼저 합니다.'
+      }
+    }));
+    advisors.slice(0, 2).forEach((reviewer) => handleEvent({
+      id: 'dc-review-' + reviewer, cycle: 3, type: 'artifact',
+      role: 'codex', logicalRole: 'councilReviewer:' + reviewer,
+      phase: 'anonymous_peer_review', artifactType: 'peer_review',
+      modelRoute: { brain: 'codex', model: 'gpt-5.4', effort: 'low' },
+      usage: { input_tokens: 90, output_tokens: 15 },
+      artifact: {
+        artifactType: 'peer_review', reviewer,
+        strongestWhy: '전제와 실행 가능성을 함께 다뤘습니다.'
+      }
+    }));
+  })()`);
+  await new Promise((resolve) => setTimeout(resolve, 120));
+  state = await client.evaluate(`(() => {
+    const cycle = document.querySelector('.workflow-cycle[data-cycle="3"]');
+    const active = cycle.querySelector('.workflow-cycle-node.is-active');
+    return {
+      nodes: cycle.querySelectorAll('.workflow-cycle-node').length,
+      advisorNodes: cycle.querySelectorAll('.workflow-advisor-grid .workflow-cycle-node').length,
+      progress: cycle.querySelector('.workflow-progress-strip').textContent,
+      labels: cycle.textContent,
+      activeAnimation: active ? getComputedStyle(active, '::before').animationName : '',
+      internalScrollableNodes: [...cycle.querySelectorAll('.workflow-cycle-node')]
+        .filter((node) => ['auto', 'scroll'].includes(getComputedStyle(node).overflowY)).length,
+      metrics: document.querySelector('#workflowMetrics').textContent,
+    };
+  })()`);
+  assert.equal(state.nodes, 7, 'decision workflow needs Framer, five advisors, and Chair');
+  assert.equal(state.advisorNodes, 5);
+  assert.match(state.progress, /독립 분석 3\/5/);
+  assert.match(state.progress, /익명 평가 2\/5/);
+  assert.match(state.labels, /Contrarian/);
+  assert.match(state.labels, /First Principles/);
+  assert.match(state.labels, /Council Chair/);
+  assert.match(state.activeAnimation, /workflow-border-counterclockwise/);
+  assert.equal(state.internalScrollableNodes, 0, 'workflow nodes must not create nested scroll containers');
+  assert.match(state.metrics, /호출 5/);
+  assert.match(state.metrics, /토큰 570/);
+
+  await client.evaluate(`(() => {
+    const viewport = document.querySelector('#workflowViewport');
+    viewport.dispatchEvent(new WheelEvent('wheel', { deltaY: -100, bubbles: true }));
+  })()`);
+  let follow = await client.evaluate(`(() => ({
+    pressed: document.querySelector('#workflowFollow').getAttribute('aria-pressed'),
+    label: document.querySelector('#workflowFollowLabel').textContent,
+  }))()`);
+  assert.equal(follow.pressed, 'false', 'manual workflow scrolling must pause auto-follow');
+  assert.match(follow.label, /현재 단계로 이동/);
+
+  await client.evaluate("document.querySelector('#workflowFollow').click()");
+  follow = await client.evaluate(`(() => ({
+    pressed: document.querySelector('#workflowFollow').getAttribute('aria-pressed'),
+    label: document.querySelector('#workflowFollowLabel').textContent,
+  }))()`);
+  assert.equal(follow.pressed, 'true');
+  assert.match(follow.label, /자동 추적/);
+}
+
 async function verifyDisclosureAccessibility(client) {
   const initial = await client.evaluate(`(() => ({
     buttonLabel: document.querySelector('#expandAllInspector').textContent.trim(),
@@ -398,6 +570,57 @@ async function verifyDisclosureAccessibility(client) {
     return detail.open && document.activeElement === summary;
   })()`);
   assert.equal(toggledBySummary, true, 'individual summary should toggle while retaining keyboard focus');
+}
+
+async function verifyCouncilRoutingSettings(client) {
+  const state = await client.evaluate(`(() => {
+    const setup = document.querySelector('#setupBody');
+    setup.classList.remove('hidden');
+    const mode = document.querySelector('#councilMode');
+    mode.value = 'decision_council';
+    mode.dispatchEvent(new Event('change', { bubbles: true }));
+    const preset = document.querySelector('#councilPreset');
+    preset.value = 'codex_primary';
+    preset.dispatchEvent(new Event('change', { bubbles: true }));
+    const cards = [...document.querySelectorAll('.council-route-card')];
+    cards[0].querySelector('.add-fallback').click();
+    cards[0].querySelector('.add-fallback').click();
+    const config = gatherConfig();
+    const panel = document.querySelector('#decisionCouncilConfig');
+    const setupCards = [...document.querySelectorAll('#setupBody > .config-card, #setupBody .planning-config-card, #councilRoleGrid .config-card')];
+    return {
+      visible: !panel.classList.contains('hidden'),
+      cards: cards.length,
+      presetOptions: preset.options.length,
+      primaryBrains: cards.map((card) => card.querySelector('[class$="-primary-brain"]').value),
+      fallbackCounts: cards.map((card) => card.querySelectorAll('.fallback-route').length),
+      gatheredFallbacks: config.council.advisors.contrarian.fallbacks.length,
+      maxParallel: config.council.maxParallel,
+      panelOverflow: panel.scrollWidth > panel.clientWidth + 1,
+      pageOverflow: document.documentElement.scrollWidth > innerWidth + 1,
+      setupCardOverflow: setupCards.some((card) => card.scrollWidth > card.clientWidth + 1),
+      headingsContained: setupCards.every((card) => {
+        const heading = card.querySelector('.config-card-title');
+        if (!heading) return false;
+        const cardRect = card.getBoundingClientRect();
+        const headingRect = heading.getBoundingClientRect();
+        return headingRect.left >= cardRect.left && headingRect.right <= cardRect.right
+          && headingRect.top >= cardRect.top && headingRect.bottom <= cardRect.bottom;
+      }),
+    };
+  })()`);
+  assert.equal(state.visible, true);
+  assert.equal(state.cards, 6);
+  assert.equal(state.presetOptions, 5);
+  assert.ok(state.primaryBrains.every((brain) => brain === 'codex'));
+  assert.equal(state.fallbackCounts[0], 3);
+  assert.ok(state.fallbackCounts.slice(1).every((count) => count === 1));
+  assert.equal(state.gatheredFallbacks, 3);
+  assert.equal(state.maxParallel, 3);
+  assert.equal(state.panelOverflow, false);
+  assert.equal(state.pageOverflow, false);
+  assert.equal(state.setupCardOverflow, false);
+  assert.equal(state.headingsContained, true);
 }
 
 async function verifyHarnessHistoryAccessibility(client) {
@@ -727,6 +950,16 @@ test('responsive browser regression at 375/768/1440px', { timeout: 120_000 }, as
     await t.test('collapsible controls expose keyboard and ARIA state', async () => {
       await setViewportAndNavigate(client, server.baseUrl, { width: 1440, height: 900 });
       await verifyDisclosureAccessibility(client);
+    });
+
+    await t.test('workflow shows active nodes, animated transfers, synthesis return, and scroll following', async () => {
+      await setViewportAndNavigate(client, server.baseUrl, { width: 1440, height: 900 });
+      await verifyWorkflowVisualization(client);
+    });
+
+    await t.test('decision routing presets and ordered fallback chains remain editable', async () => {
+      await setViewportAndNavigate(client, server.baseUrl, { width: 1440, height: 900 });
+      await verifyCouncilRoutingSettings(client);
     });
 
     await t.test('Harness history controls are collapsible, named, and safe by default', async () => {

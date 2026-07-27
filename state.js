@@ -18,7 +18,10 @@ const {
 const DATA_DIR = path.join(__dirname, 'data');
 const SNAPSHOT = path.join(DATA_DIR, 'session.json');
 const STATE_VERSION = 4;
-const RUNNING_PHASES = new Set(['harnessing', 'dispatching', 'drafting', 'critiquing', 'revising', 'synthesizing']);
+const RUNNING_PHASES = new Set([
+  'harnessing', 'dispatching', 'drafting', 'critiquing', 'revising', 'synthesizing',
+  'framing', 'independent_analysis', 'anonymous_peer_review', 'chair_synthesis',
+]);
 const PUBLIC_EVENT_TYPES = new Set([
   'status', 'stage', 'artifact', 'checkpoint', 'user', 'error', 'evaluation', 'approved', 'config',
 ]);
@@ -87,6 +90,28 @@ function digest(value) {
   return crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
 }
 
+function normalizeUsage(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const aliases = {
+    input_tokens: 'inputTokens',
+    inputTokens: 'inputTokens',
+    output_tokens: 'outputTokens',
+    outputTokens: 'outputTokens',
+    cached_input_tokens: 'cachedInputTokens',
+    cache_read_input_tokens: 'cacheReadInputTokens',
+    cache_creation_input_tokens: 'cacheCreationInputTokens',
+    total_cost_usd: 'costUsd',
+    cost_usd: 'costUsd',
+    duration_ms: 'durationMs',
+  };
+  const normalized = {};
+  for (const [key, target] of Object.entries(aliases)) {
+    const number = Number(value[key]);
+    if (Number.isFinite(number) && number >= 0) normalized[target] = number;
+  }
+  return Object.keys(normalized).length ? normalized : null;
+}
+
 function defaultState(sessionConfig = config.cloneDefaults()) {
   const createdAt = now();
   return {
@@ -97,6 +122,8 @@ function defaultState(sessionConfig = config.cloneDefaults()) {
     metadataVersion: 1,
     config: config.normalizeSessionConfig(sessionConfig),
     sessions: { orchestrator: null, claudeWorker: null, codexWorker: null },
+    routeSessions: {},
+    routeHealth: {},
     sessionAudit: [],
     phase: 'idle',
     cycle: 0,
@@ -108,6 +135,7 @@ function defaultState(sessionConfig = config.cloneDefaults()) {
     cycles: [],
     currentPlan: null,
     currentEvaluation: null,
+    councilReports: [],
     lastInstruction: null,
     lastError: null,
     approvedAt: null,
@@ -139,11 +167,17 @@ function sanitizeEvent(event) {
     timestamp: typeof event.timestamp === 'string' ? event.timestamp : now(),
   };
   clean.content = clean.message;
-  for (const key of ['phase', 'cycle', 'round', 'planVersion', 'runId', 'artifactType', 'intent', 'target', 'reference']) {
+  for (const key of [
+    'phase', 'cycle', 'round', 'planVersion', 'runId', 'artifactType', 'intent',
+    'target', 'reference', 'logicalRole', 'routeIndex',
+  ]) {
     if (event[key] !== undefined && event[key] !== null) clean[key] = event[key];
   }
   if (event.artifact && typeof event.artifact === 'object') clean.artifact = publicProjection(event.artifact);
   if (event.evaluation && typeof event.evaluation === 'object') clean.evaluation = publicProjection(event.evaluation);
+  for (const key of ['modelRoute', 'fallback', 'circuit', 'usage']) {
+    if (event[key] && typeof event[key] === 'object') clean[key] = publicProjection(event[key]);
+  }
   return clean;
 }
 
@@ -296,6 +330,10 @@ class StateStore {
           claudeWorker: parsed.sessions?.claudeWorker || null,
           codexWorker: parsed.sessions?.codexWorker || null,
         },
+        routeSessions: parsed.routeSessions && typeof parsed.routeSessions === 'object'
+          && !Array.isArray(parsed.routeSessions) ? parsed.routeSessions : {},
+        routeHealth: parsed.routeHealth && typeof parsed.routeHealth === 'object'
+          && !Array.isArray(parsed.routeHealth) ? parsed.routeHealth : {},
         sessionAudit: Array.isArray(parsed.sessionAudit)
           ? parsed.sessionAudit.filter((entry) => entry && typeof entry === 'object')
             .slice(-config.limits.sessionAuditEntries)
@@ -314,6 +352,9 @@ class StateStore {
                 : {},
             }))
             .slice(-config.limits.cycles)
+          : [],
+        councilReports: Array.isArray(parsed.councilReports)
+          ? parsed.councilReports.filter((item) => item && typeof item === 'object').slice(-20)
           : [],
         harnesses: loadedHarnesses,
         harnessRevision: Math.max(0, Number(parsed.harnessRevision) || 0),
@@ -396,14 +437,17 @@ class StateStore {
     if (this.isRunning()) throw new Error('실행 중에는 설정을 변경할 수 없습니다.');
     const previous = this.state.config;
     const next = config.normalizeSessionConfig(input, previous);
-    const orchestratorBrainChanged = previous.orchestrator.brain !== next.orchestrator.brain;
+    const changedRoles = ['orchestrator', 'claudeWorker', 'codexWorker'].filter((role) => (
+      previous[role].brain !== next[role].brain
+      || previous[role].model !== next[role].model
+    ));
     if (reset) {
       this.snapshot();
       this.state = defaultState(next);
       this._syncSessionRegistry();
     } else {
       this.state.config = next;
-      if (orchestratorBrainChanged) this.state.sessions.orchestrator = null;
+      for (const role of changedRoles) this.state.sessions[role] = null;
     }
     this.touch();
     this.snapshot();
@@ -1051,11 +1095,21 @@ class StateStore {
 
   recordSessionInvocation({
     role, artifactType, attempt, previousSession, returnedSession, execution, promptBinding,
+    brain, model, effort, routeIndex = 0, fallbackFrom = null, usage = null,
   }) {
     const entry = {
       role,
       artifactType,
       attempt,
+      brain: brain || execution?.provider || null,
+      model: model || execution?.model || null,
+      effort: effort || execution?.effort || null,
+      routeIndex: Number(routeIndex) || 0,
+      fallbackFrom: fallbackFrom && typeof fallbackFrom === 'object' ? {
+        brain: fallbackFrom.brain || null,
+        model: fallbackFrom.model || null,
+        effort: fallbackFrom.effort || null,
+      } : null,
       previousSession: previousSession || null,
       returnedSession,
       continuity: previousSession
@@ -1069,6 +1123,7 @@ class StateStore {
         : 'started',
       cycle: this.state.cycle,
       round: this.state.round,
+      usage: normalizeUsage(usage),
       execution: execution && typeof execution === 'object' ? {
         provider: execution.provider || null,
         executable: execution.executable || null,
@@ -1099,6 +1154,36 @@ class StateStore {
     return entry;
   }
 
+  openRouteCircuit(route, classification = {}) {
+    const scope = classification.scope === 'provider' ? 'provider' : 'route';
+    const key = scope === 'provider'
+      ? `provider:${route.brain}`
+      : `route:${route.brain}:${route.model}:${route.effort}`;
+    const previous = this.state.routeHealth?.[key] || {};
+    const openedAt = now();
+    this.state.routeHealth ||= {};
+    this.state.routeHealth[key] = {
+      key,
+      scope,
+      brain: route.brain,
+      model: scope === 'route' ? route.model : null,
+      effort: scope === 'route' ? route.effort : null,
+      reason: classification.reason || 'provider_limit_or_availability',
+      failureCount: Math.max(0, Number(previous.failureCount) || 0) + 1,
+      openedAt,
+      openUntil: new Date(Date.now() + config.limits.modelCircuitCooldownMs).toISOString(),
+    };
+    this.touch();
+    this.snapshot();
+    return this.state.routeHealth[key];
+  }
+
+  closeRouteCircuit(route) {
+    if (!this.state.routeHealth) return;
+    delete this.state.routeHealth[`route:${route.brain}:${route.model}:${route.effort}`];
+    this.touch();
+  }
+
   touch() {
     this.state.updatedAt = now();
     this._syncSessionRegistry();
@@ -1117,7 +1202,7 @@ class StateStore {
   publicState() {
     const s = this.state;
     const currentCycleHarnessRevision = this.currentCycle()?.harnessRevision ?? null;
-    const harnessPlanStale = Boolean(s.currentPlan)
+    const harnessPlanStale = s.config.mode !== 'decision_council' && Boolean(s.currentPlan)
       && (!Number.isSafeInteger(Number(currentCycleHarnessRevision))
         || currentCycleHarnessRevision === null
         || Number(currentCycleHarnessRevision) !== Number(s.harnessRevision));
@@ -1137,6 +1222,7 @@ class StateStore {
       requiredQuestions: s.currentPlan?.requiredQuestions || [],
       optionalQuestions: s.currentPlan?.optionalQuestions || [],
       currentEvaluation: s.currentEvaluation,
+      councilReports: s.councilReports || [],
       lastError: s.lastError,
       approvedAt: s.approvedAt,
       harnesses: this.getHarnessState().harnesses,
@@ -1151,6 +1237,38 @@ class StateStore {
         codexWorker: Boolean(s.sessions.codexWorker),
         resumedCalls: (s.sessionAudit || []).filter((entry) => entry.continuity === 'resumed_same').length,
         replacedCalls: (s.sessionAudit || []).filter((entry) => entry.continuity === 'replaced').length,
+      },
+      modelRouting: {
+        mode: s.config.mode || 'planning',
+        fallbackCount: (s.sessionAudit || []).filter((entry) => Number(entry.routeIndex) > 0).length,
+        totals: (s.sessionAudit || []).reduce((totals, entry) => {
+          totals.calls += 1;
+          totals.inputTokens += Number(entry.usage?.inputTokens) || 0;
+          totals.outputTokens += Number(entry.usage?.outputTokens) || 0;
+          totals.cachedInputTokens += Number(entry.usage?.cachedInputTokens) || 0;
+          totals.cacheReadInputTokens += Number(entry.usage?.cacheReadInputTokens) || 0;
+          totals.cacheCreationInputTokens += Number(entry.usage?.cacheCreationInputTokens) || 0;
+          totals.costUsd += Number(entry.usage?.costUsd) || 0;
+          totals.durationMs += Number(entry.usage?.durationMs) || 0;
+          return totals;
+        }, {
+          calls: 0, inputTokens: 0, outputTokens: 0, cachedInputTokens: 0,
+          cacheReadInputTokens: 0, cacheCreationInputTokens: 0, costUsd: 0, durationMs: 0,
+        }),
+        circuits: Object.values(s.routeHealth || {}).filter((entry) => (
+          Date.parse(entry?.openUntil || '') > Date.now()
+        )),
+        latest: (s.sessionAudit || []).slice(-20).map((entry) => ({
+          role: entry.role,
+          artifactType: entry.artifactType,
+          brain: entry.brain || entry.execution?.provider || null,
+          model: entry.model || entry.execution?.model || null,
+          effort: entry.effort || entry.execution?.effort || null,
+          routeIndex: Number(entry.routeIndex) || 0,
+          fallbackFrom: entry.fallbackFrom || null,
+          usage: entry.usage || null,
+          at: entry.at,
+        })),
       },
       sessionMetadata: this.sessionMetadata(s.sessionKey),
       updatedAt: s.updatedAt,

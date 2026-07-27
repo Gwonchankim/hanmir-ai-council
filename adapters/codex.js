@@ -165,6 +165,7 @@ async function runCodex({
   let fatalStreamError = '';
   let transientStreamError = '';
   let malformedError = '';
+  let usage = null;
 
   const emitText = (chunk) => {
     if (!chunk) return;
@@ -190,6 +191,7 @@ async function runCodex({
 
       if (event.type === 'turn.completed') {
         sawTurnCompleted = true;
+        if (event.usage && typeof event.usage === 'object') usage = event.usage;
         return;
       }
 
@@ -246,6 +248,7 @@ async function runCodex({
   return {
     text: text.trim(),
     threadId: currentThreadId,
+    usage,
     execution: {
       provider: 'codex', executable: command, exitCode: result.code,
       completionEvent: 'turn.completed', resumed: Boolean(threadId),

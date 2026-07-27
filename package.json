@@ -1,8 +1,8 @@
 {
   "name": "ai-council",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
-  "description": "Claude와 ChatGPT가 공동 기획하고 상호 검수하는 로컬 AI Council MVP",
+  "description": "Claude와 Codex가 공동 기획하거나 5개 독립 관점으로 의사결정을 검증하는 로컬 AI Council",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
@@ -14,6 +14,8 @@
     "test:browser": "node --test --test-concurrency=1 tests/browser/responsive-ui.browser.js",
     "test:e2e": "node scripts/run-canonical-e2e.js",
     "test:e2e:resume": "node scripts/run-canonical-e2e.js --resume",
+    "test:e2e:council": "node scripts/run-decision-council-e2e.js",
+    "test:e2e:council:resume": "node scripts/run-decision-council-e2e.js --resume",
     "isolation:check": "node scripts/isolation-preflight.js --profile standard-user --json",
     "check": "node --check server.js && node --check engine.js && node --check state.js && node --check lib/access-security.js && node --check public/app.js"
   },

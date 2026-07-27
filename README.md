@@ -1,6 +1,6 @@
 # Hanmir AI Council
 
-Claude와 ChatGPT(Codex)가 독립적으로 기획하고 서로 교차 검토한 뒤, 별도 Orchestrator가 결과를 통합하는 로컬 협업 스튜디오입니다. 현재 MVP 범위는 사용자 지시, 공동 기획, 사용자 승인·피드백의 1~3단계입니다.
+Claude와 ChatGPT(Codex)가 공동 기획하거나, 서로 다른 5개 사고 관점이 중요한 의사결정을 독립 분석·익명 평가한 뒤 의장이 종합하는 로컬 협업 스튜디오입니다. 현재 MVP 범위는 사용자 지시, 공동 기획 또는 의사결정 검증, 사용자 승인·피드백의 1~3단계입니다.
 
 웹 UI와 오케스트레이션 서버는 로컬에서 실행됩니다. 다만 Claude·Codex CLI는 각 제공자의 모델 서비스와 통신하므로 완전한 오프라인 프로그램은 아닙니다.
 
@@ -9,6 +9,8 @@ Claude와 ChatGPT(Codex)가 독립적으로 기획하고 서로 교차 검토한
 - 접고 펼칠 수 있는 왼쪽 세션 rail과 세션별 전체 상태 복원
 - 제목 검색과 진행 중·보관됨 범위 필터, 세션 이름 변경·보관·복원
 - 중앙 대화 영역과 오른쪽 Work ledger를 약 4:1로 배치한 반응형 UI
+- Cycle별로 접히는 사용자 → Orchestrator → 병렬 Agent → 종합 Orchestrator Workflow. 의사결정 모드에서는 Framer → 5개 관점 → 익명 평가 → Chair로 전환
+- 실행 노드의 반시계 방향 테두리 흐름, Agent 전달선 애니메이션, 사용자 스크롤 시 일시정지되는 현재 단계 자동 추적
 - Orchestrator, Claude 워커, ChatGPT 워커의 수행 내용과 핵심 결과 요약
 - 요약 및 Harness 항목별 접기·펼치기와 전체 펼치기·접기
 - 지시마다 Orchestrator가 업무 전용 Harness 3종을 먼저 설계한 뒤 그 규칙을 실제 호출에 주입
@@ -20,6 +22,12 @@ Claude와 ChatGPT(Codex)가 독립적으로 기획하고 서로 교차 검토한
 - Tailscale Serve의 HTTPS·사용자 identity를 이용하는 비공개 원격 접속 모드
 - 스마트폰의 `세션 · 채팅 · 인사이트` 동적 전환, safe-area·가상 키보드 대응 UI
 - 375·768·1440px 레이아웃과 주요 접근성·XSS·원격 상태 회귀를 검사하는 모델 비호출 브라우저 테스트
+- Contrarian, First Principles, Expansionist, Outsider, Executor의 5개 독립 관점 Council
+- Response A–E 무작위 익명화, 본문 역할·모델명 누출 차단, 원본 digest 결속, 5개 동료평가와 Council Chair 종합
+- 모든 조언자·의장과 기존 Orchestrator·워커의 역할별 주 모델 및 최대 5개 순차 fallback 설정
+- 균형·최저 비용·최고 품질·Claude 제한 대응 프리셋
+- 사용량·세션·rate limit·모델 가용성 오류에서만 fallback하며, 같은 Provider의 반복 실패를 막는 circuit breaker
+- 역할별 호출·토큰·비용·fallback 현황 표시와 Council HTML/Markdown 보고서 자동 생성
 
 ## 실행
 
@@ -89,6 +97,25 @@ Windows Sandbox/VM은 이 앱 내부에서 생성·검증할 수 없는 외부 �
 8. 필수 질문이 있으면 승인을 차단합니다. 사용자 답변·피드백은 새 cycle로 재배분되며, 승인 시 MVP 루프가 종료됩니다.
 
 각 cycle은 최대 라운드, 구조화 결과 검증, 사용자 체크포인트를 사용해 무한 반복과 잘못된 승인을 막습니다.
+
+## 5관점 의사결정 Council
+
+새 세션 설정에서 `5관점 의사결정 Council`을 선택하면 다음 프로토콜을 사용합니다.
+
+1. Council Framer가 질문을 핵심 결정, 선택지, 제약조건, 증거, 오판 비용으로 중립화합니다.
+2. 질문이 지나치게 모호한 경우에만 확인 질문 하나를 반환하고 사용자 답변을 기다립니다.
+3. Contrarian, First Principles Thinker, Expansionist, Outsider, Executor가 서로의 답을 보지 않고 독립 분석합니다.
+4. 다섯 결과를 무작위 Response A–E로 바꾸고, 작성 역할·모델명 누출 여부와 원본 digest를 검증한 뒤 각 조언자가 동료평가합니다.
+5. Council Chair가 합의점, 충돌, 동료평가에서 발견된 사각지대, 최종 권고, 가장 먼저 할 한 가지를 종합합니다.
+6. 결과를 `data/council-artifacts/<session-id>/` 아래의 HTML 보고서와 Markdown 전체 기록으로 저장합니다. 현재 Cycle Workflow의 보고서 버튼에서 바로 열 수 있습니다.
+
+이 모드는 단순 사실 조회나 번역보다 신제품 출시, 시장 진입, 투자·채용, Go/No-Go처럼 잘못된 판단의 비용이 큰 결정에 적합합니다.
+
+### 역할별 모델과 자동 fallback
+
+설정 화면에서 다섯 조언자와 의장 각각의 주 Provider·모델·effort와 순서가 있는 최대 5개 대체 경로를 선택할 수 있습니다. 기존 공동 기획 모드의 Orchestrator, Claude 워커, Codex 워커도 대체 경로를 지원합니다.
+
+자동 fallback은 월간 사용량·세션 한도, rate limit, quota, 일시적 연결 실패, 모델 미지원·과부하처럼 Provider 가용성과 관련된 오류에만 적용됩니다. Provider 한도 또는 rate-limit이면 기본 15분 circuit이 열려 후속 역할은 같은 Provider를 다시 호출하지 않습니다. JSON Schema 오류, 프롬프트 크기 초과, 의미 검증 실패와 코드 오류는 다른 모델로 숨기지 않고 원래 오류로 중단합니다. 사용 경로와 정규화된 토큰·비용·지연 정보는 세션 audit와 공개 상태의 `modelRouting`에 기록됩니다.
 
 ## Harness 동작
 
@@ -252,6 +279,20 @@ npm run isolation:check
 npm run test:e2e
 ```
 
+5관점 의사결정 경로를 실제 Claude·Codex로 검증하려면 다음 명령을 사용합니다. Framer, 5개 독립 분석, 5개 익명 평가, Chair까지 총 12개의 논리 호출이 발생하며, 같은 실행에서 한도 오류가 난 Provider는 circuit breaker가 열려 이후 역할이 즉시 fallback으로 전환됩니다.
+
+```powershell
+npm run test:e2e:council
+```
+
+실패한 실행의 검증된 체크포인트에서 이어서 실행하려면 다음 명령을 사용합니다.
+
+```powershell
+npm run test:e2e:council:resume
+```
+
+기본 모델은 Claude `claude-haiku-4-5-20251001`, Codex `gpt-5.6-terra`입니다. `AI_COUNCIL_E2E_CLAUDE_MODEL`, `AI_COUNCIL_E2E_CODEX_MODEL`, `AI_COUNCIL_DECISION_E2E_QUESTION`으로 변경할 수 있습니다. 결과와 전체 체크포인트는 `evaluation/runs/DECISION-COUNCIL-*` 아래에 남습니다.
+
 실패·사용자 입력 대기·승인 대기 상태의 HM-ThermaShield canonical 체크포인트와 역할별 CLI 세션 ID가 남아 있으면 새 세션으로 초기화하지 않고 다음 명령으로 이어서 실행할 수 있습니다.
 
 ```powershell
@@ -265,7 +306,7 @@ resume 명령은 저장된 canonical 상태가 `failed`, `awaiting_input`, `awai
 
 ```text
 server.js                 Express, SSE, API, loopback·same-origin 보호
-engine.js                 Harness-first 기획 루프 상태기계
+engine.js                 Harness-first 기획 루프, 5관점 Council, 모델 fallback
 state.js                  세션 registry, 전체 스냅샷, 공개 상태
 harnesses.js              Harness Markdown·구조화 변환, override, 제한
 schemas.js                단계별 구조화 산출물 JSON Schema
@@ -275,8 +316,11 @@ lib/harness-revision-store.js
                           Harness revision 무결성·diff 저장소
 lib/os-isolation.js       Windows token·경로·loopback preflight
 lib/process-runner.js     timeout, abort, Windows process tree, 환경 정리
+lib/model-router.js       역할별 모델 체인과 fallback 허용 오류 분류
+lib/council-anonymity.js  익명 본문 누출 검사, 원본 digest와 체크포인트 무결성
+lib/council-report.js     self-contained HTML 보고서와 Markdown 기록 생성
 public/                   세션 rail, 4:1 대화·ledger, Harness 편집 UI
-scripts/                  저권한 launcher, canonical E2E runner
+scripts/                  저권한 launcher, canonical 및 실제 Decision Council E2E runner
 evaluation/               canonical 시나리오, 증거 gate, 실행 결과
 tests/                    단위·통합·보안 및 3개 viewport 브라우저 회귀 테스트
 ```

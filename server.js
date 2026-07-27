@@ -196,6 +196,30 @@ function createApp({
     preflight: preflight(),
   }));
   app.get('/api/state', (req, res) => res.json(store.publicState()));
+  app.get('/api/council/artifacts/:name', (req, res, next) => {
+    try {
+      const name = String(req.params.name || '');
+      if (!/^(?:council-report-[A-Za-z0-9-]+\.html|council-transcript-[A-Za-z0-9-]+\.md)$/.test(name)
+        || path.basename(name) !== name) {
+        return res.status(400).json({ error: { message: 'Invalid council artifact name.' } });
+      }
+      const allowed = new Set((store.get().councilReports || []).flatMap((entry) => [
+        entry?.html?.name,
+        entry?.transcript?.name,
+      ]).filter(Boolean));
+      if (!allowed.has(name)) {
+        return res.status(404).json({ error: { message: 'Council artifact not found for the active session.' } });
+      }
+      const filePath = path.join(store.dataDir, 'council-artifacts', store.get().sessionKey, name);
+      if (!fs.existsSync(filePath)) {
+        return res.status(410).json({ error: { message: 'Council artifact file is unavailable.' } });
+      }
+      res.type(name.endsWith('.html') ? 'html' : 'text/markdown; charset=utf-8');
+      return res.sendFile(filePath);
+    } catch (error) {
+      return next(error);
+    }
+  });
 
   function expectedHarnessRevision(req) {
     if (req.body?.expectedRevision !== undefined) return Number(req.body.expectedRevision);
@@ -465,7 +489,9 @@ function createApp({
   app.post(['/api/instruct', '/instruct'], (req, res, next) => {
     try {
       const instruction = String(req.body?.instruction || '').trim();
-      const run = engine.runPlanning(instruction, false);
+      const run = typeof engine.runInstruction === 'function'
+        ? engine.runInstruction(instruction, false)
+        : engine.runPlanning(instruction, false);
       run.promise.catch(() => {});
       res.status(202).json({ ok: true, runId: run.runId, cycle: run.cycle, phase: store.get().phase });
     } catch (error) { next(error); }
@@ -480,7 +506,9 @@ function createApp({
         throw error;
       }
       const feedback = String(req.body?.feedback || '').trim();
-      const run = engine.runPlanning(feedback, true);
+      const run = typeof engine.runInstruction === 'function'
+        ? engine.runInstruction(feedback, true)
+        : engine.runPlanning(feedback, true);
       run.promise.catch(() => {});
       res.status(202).json({ ok: true, runId: run.runId, cycle: run.cycle, phase: store.get().phase });
     } catch (error) { next(error); }
@@ -509,22 +537,29 @@ function createApp({
         error.status = 409;
         throw error;
       }
-      const currentCycleHarnessRevision = store.currentCycle()?.harnessRevision ?? null;
-      if (currentCycleHarnessRevision === null
-        || Number(currentCycleHarnessRevision) !== Number(state.harnessRevision)) {
-        const error = new Error(
-          `Harness revision changed after this plan was produced (plan: ${currentCycleHarnessRevision ?? 'none'}, current: ${state.harnessRevision}). Re-run the Council before approval.`,
-        );
-        error.status = 409;
-        error.currentVersion = state.harnessRevision;
-        throw error;
+      if (state.config.mode !== 'decision_council') {
+        const currentCycleHarnessRevision = store.currentCycle()?.harnessRevision ?? null;
+        if (currentCycleHarnessRevision === null
+          || Number(currentCycleHarnessRevision) !== Number(state.harnessRevision)) {
+          const error = new Error(
+            `Harness revision changed after this plan was produced (plan: ${currentCycleHarnessRevision ?? 'none'}, current: ${state.harnessRevision}). Re-run the Council before approval.`,
+          );
+          error.status = 409;
+          error.currentVersion = state.harnessRevision;
+          throw error;
+        }
       }
       state.phase = 'approved';
       state.approvedAt = new Date().toISOString();
       const cycle = store.currentCycle();
       if (cycle) cycle.status = 'approved';
+      const decisionCouncil = state.config.mode === 'decision_council';
       publish({
-        type: 'approved', role: 'system', message: `통합 기획안 v${state.planVersion}을 승인했습니다. MVP 기획 루프가 종료됩니다.`,
+        type: 'approved',
+        role: 'system',
+        message: decisionCouncil
+          ? `Council 최종 판단 v${state.planVersion}을 승인했습니다.`
+          : `통합 기획안 v${state.planVersion}을 승인했습니다. MVP 기획 루프가 종료됩니다.`,
       });
       res.json({ ok: true, phase: state.phase, planVersion: state.planVersion });
     } catch (error) { next(error); }

@@ -128,6 +128,7 @@ async function runClaude({
   let sawResult = false;
   let streamError = '';
   let malformedError = '';
+  let usage = null;
 
   const emitText = (chunk) => {
     if (!chunk) return;
@@ -157,6 +158,13 @@ async function runClaude({
 
       if (event.type === 'result') {
         sawResult = true;
+        if (event.usage && typeof event.usage === 'object') usage = event.usage;
+        if (Number.isFinite(Number(event.total_cost_usd))) {
+          usage = { ...(usage || {}), total_cost_usd: Number(event.total_cost_usd) };
+        }
+        if (Number.isFinite(Number(event.duration_ms))) {
+          usage = { ...(usage || {}), duration_ms: Number(event.duration_ms) };
+        }
         if (event.session_id) currentSessionId = String(event.session_id);
         if (event.is_error === true || ['error', 'failed'].includes(event.subtype)) {
           streamError = safeEventError(event);
@@ -270,6 +278,7 @@ async function runClaude({
   return {
     text: finalText.trim(),
     sessionId: currentSessionId,
+    usage,
     execution: {
       provider: 'claude', executable: command, exitCode: result.code,
       completionEvent: 'result', resumed: Boolean(sessionId), model: model || null, effort: effort || null,

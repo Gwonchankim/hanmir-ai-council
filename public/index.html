@@ -65,7 +65,7 @@
         <div class="brand-block">
           <p class="eyebrow">Hanmir · Local AI workspace</p>
           <h1>Plan with a <em>council.</em></h1>
-          <p class="brand-subtitle">Orchestrator와 두 워커가 하나의 기획안을 함께 만듭니다.</p>
+          <p id="brandSubtitle" class="brand-subtitle">Orchestrator와 두 워커가 하나의 기획안을 함께 만듭니다.</p>
         </div>
 
         <div class="run-summary" aria-label="현재 실행 상태">
@@ -112,9 +112,19 @@
         </div>
 
         <div id="setupBody" class="setup-body hidden">
+          <section class="config-card mode-card" aria-label="Council 프로토콜">
+            <h3 class="config-card-title">Council 프로토콜</h3>
+            <p>기존 공동 기획 또는 5개 독립 관점·익명 동료평가·의장 종합을 선택합니다.</p>
+            <label for="councilMode">실행 모드</label>
+            <select id="councilMode" name="councilMode">
+              <option value="planning">공동 기획 · Claude × Codex</option>
+              <option value="decision_council">5관점 의사결정 Council</option>
+            </select>
+          </section>
+
           <div class="config-grid">
-            <fieldset class="config-card orchestrator-card">
-              <legend>Orchestrator</legend>
+            <section class="config-card orchestrator-card planning-config-card" aria-label="Orchestrator">
+              <h3 class="config-card-title">Orchestrator</h3>
               <p>지시를 해석하고 Harness를 설계한 뒤 결과를 통합합니다.</p>
 
               <label for="orcBrain">두뇌</label>
@@ -128,10 +138,21 @@
 
               <label for="orcEffort">Effort</label>
               <select id="orcEffort" name="orchestratorEffort"></select>
-            </fieldset>
 
-            <fieldset class="config-card claude-card">
-              <legend>Claude 워커</legend>
+              <label for="orcFallbackBrain">대체 Provider</label>
+              <select id="orcFallbackBrain" name="orchestratorFallbackBrain">
+                <option value="">사용 안 함</option>
+                <option value="claude">Claude</option>
+                <option value="codex">ChatGPT (Codex)</option>
+              </select>
+              <label for="orcFallbackModel">대체 모델</label>
+              <select id="orcFallbackModel" name="orchestratorFallbackModel"></select>
+              <label for="orcFallbackEffort">대체 Effort</label>
+              <select id="orcFallbackEffort" name="orchestratorFallbackEffort"></select>
+            </section>
+
+            <section class="config-card claude-card planning-config-card" aria-label="Claude 워커">
+              <h3 class="config-card-title">Claude 워커</h3>
               <p>독립 초안과 Codex 초안의 교차 비평을 맡습니다.</p>
 
               <label for="clModel">모델</label>
@@ -139,10 +160,15 @@
 
               <label for="clEffort">Effort</label>
               <select id="clEffort" name="claudeEffort"></select>
-            </fieldset>
 
-            <fieldset class="config-card codex-card">
-              <legend>ChatGPT 워커</legend>
+              <label for="clFallbackModel">대체 Codex 모델</label>
+              <select id="clFallbackModel" name="claudeFallbackModel"></select>
+              <label for="clFallbackEffort">대체 Effort</label>
+              <select id="clFallbackEffort" name="claudeFallbackEffort"></select>
+            </section>
+
+            <section class="config-card codex-card planning-config-card" aria-label="ChatGPT 워커">
+              <h3 class="config-card-title">ChatGPT 워커</h3>
               <p>독립 초안과 Claude 초안의 교차 비평을 맡습니다.</p>
 
               <label for="cxModel">모델</label>
@@ -150,8 +176,44 @@
 
               <label for="cxEffort">Effort</label>
               <select id="cxEffort" name="codexEffort"></select>
-            </fieldset>
+
+              <label for="cxFallbackModel">대체 Claude 모델</label>
+              <select id="cxFallbackModel" name="codexFallbackModel"></select>
+              <label for="cxFallbackEffort">대체 Effort</label>
+              <select id="cxFallbackEffort" name="codexFallbackEffort"></select>
+            </section>
           </div>
+
+          <section id="decisionCouncilConfig" class="decision-council-config hidden" aria-labelledby="decisionCouncilConfigTitle">
+            <div class="decision-config-heading">
+              <div>
+                <p class="eyebrow">Five perspectives</p>
+                <h3 id="decisionCouncilConfigTitle">역할별 모델 라우팅</h3>
+              </div>
+              <div class="decision-config-tools">
+                <label for="councilPreset">구성 프리셋
+                  <select id="councilPreset" name="councilPreset">
+                    <option value="">직접 설정</option>
+                    <option value="balanced">균형</option>
+                    <option value="low_cost">최저 비용</option>
+                    <option value="quality">최고 품질</option>
+                    <option value="codex_primary">Claude 제한 대응</option>
+                  </select>
+                </label>
+                <label for="councilMaxParallel">최대 동시 실행
+                  <select id="councilMaxParallel" name="councilMaxParallel">
+                    <option value="1">1</option>
+                    <option value="2">2</option>
+                    <option value="3">3</option>
+                    <option value="4">4</option>
+                    <option value="5">5</option>
+                  </select>
+                </label>
+              </div>
+            </div>
+            <p class="helper-text">주 모델이 사용량·세션·rate limit 또는 모델 가용성 오류를 반환하면 대체 모델로 자동 전환합니다.</p>
+            <div id="councilRoleGrid" class="config-grid council-role-grid"></div>
+          </section>
 
           <div class="setup-actions">
             <button id="applySession" class="button primary" type="button">이 설정으로 새 세션 시작</button>
@@ -188,45 +250,116 @@
               <ol id="activityLog" class="activity-log" aria-label="단계 기록"></ol>
             </section>
 
-            <section class="council-grid" aria-label="AI Council 에이전트 대화">
-              <article class="agent-lane orchestrator-lane" aria-labelledby="orchestratorLaneTitle">
-                <header class="lane-heading">
-                  <div>
-                    <span class="lane-symbol orchestrator-symbol" aria-hidden="true">O</span>
-                    <div><p class="tag-label">Director</p><h2 id="orchestratorLaneTitle">Orchestrator</h2></div>
-                  </div>
-                  <span id="orchestratorCount" class="message-count" aria-label="Orchestrator 메시지 수">0</span>
-                </header>
-                <div id="orchestratorMessages" class="lane-messages" aria-live="polite">
-                  <p class="empty-state">과업 배분, Harness 변경, 통합 결과가 표시됩니다.</p>
+            <section id="workflowPanel" class="workflow-panel" aria-labelledby="workflowTitle">
+              <header class="workflow-head">
+                <div>
+                  <p class="eyebrow">Live orchestration</p>
+                  <h2 id="workflowTitle">Council Workflow</h2>
+                  <p id="workflowDescription">현재 Cycle의 실행 위치와 Agent 사이 전달 흐름을 따라갑니다.</p>
                 </div>
-              </article>
+                <div class="workflow-head-actions">
+                  <div id="workflowMetrics" class="workflow-metrics" aria-label="모델 사용 현황"></div>
+                  <button id="workflowFollow" class="workflow-follow" type="button" aria-pressed="true">
+                    <span class="workflow-follow-dot" aria-hidden="true"></span>
+                    <span id="workflowFollowLabel">현재 단계 자동 추적</span>
+                  </button>
+                </div>
+              </header>
 
-              <article class="agent-lane claude-lane" aria-labelledby="claudeLaneTitle">
-                <header class="lane-heading">
-                  <div>
-                    <span class="lane-symbol claude-symbol" aria-hidden="true">C</span>
-                    <div><p class="tag-label">Worker 01</p><h2 id="claudeLaneTitle">Claude</h2></div>
+              <div id="workflowViewport" class="workflow-viewport" tabindex="0"
+                   aria-label="현재 Council 실행 Workflow">
+                <div id="workflowCycles" class="workflow-cycles" aria-live="polite"></div>
+                <div class="workflow-track hidden" aria-hidden="true">
+                  <div id="workflowIngress" class="workflow-ingress" aria-hidden="true">
+                    <span>사용자 요청</span>
+                    <i></i>
                   </div>
-                  <span id="claudeCount" class="message-count" aria-label="Claude 메시지 수">0</span>
-                </header>
-                <div id="claudeMessages" class="lane-messages" aria-live="polite">
-                  <p class="empty-state">Claude의 공개 초안과 비평이 표시됩니다.</p>
-                </div>
-              </article>
 
-              <article class="agent-lane codex-lane" aria-labelledby="codexLaneTitle">
-                <header class="lane-heading">
-                  <div>
-                    <span class="lane-symbol codex-symbol" aria-hidden="true">G</span>
-                    <div><p class="tag-label">Worker 02</p><h2 id="codexLaneTitle">ChatGPT</h2></div>
+                  <article id="workflowOrchestratorTop"
+                           class="workflow-node workflow-node-orchestrator orchestrator-lane"
+                           data-workflow-role="orchestrator" aria-labelledby="orchestratorLaneTitle">
+                    <header class="lane-heading">
+                      <div>
+                        <span class="lane-symbol orchestrator-symbol" aria-hidden="true">O</span>
+                        <div><p class="tag-label">Director · Intake</p><h2 id="orchestratorLaneTitle">Orchestrator</h2></div>
+                      </div>
+                      <span id="orchestratorCount" class="message-count" aria-label="Orchestrator 메시지 수">0</span>
+                    </header>
+                    <p id="workflowOrchestratorStatus" class="workflow-node-status" role="status">사용자 지시를 기다리고 있습니다.</p>
+                    <div id="orchestratorMessages" class="lane-messages workflow-node-messages" aria-live="polite">
+                      <p class="empty-state">과업 분해와 Agent 전달 내용이 이곳에 표시됩니다.</p>
+                    </div>
+                  </article>
+
+                  <div id="workflowDispatchLink" class="workflow-connector workflow-split"
+                       aria-label="Orchestrator에서 Agent로 전달">
+                    <span class="workflow-line line-trunk"></span>
+                    <span class="workflow-line line-branch"></span>
+                    <span class="workflow-line line-leg line-leg-left"></span>
+                    <span class="workflow-line line-leg line-leg-right"></span>
+                    <span class="workflow-transfer-label">과업 전달</span>
                   </div>
-                  <span id="codexCount" class="message-count" aria-label="ChatGPT 메시지 수">0</span>
-                </header>
-                <div id="codexMessages" class="lane-messages" aria-live="polite">
-                  <p class="empty-state">ChatGPT의 공개 초안과 비평이 표시됩니다.</p>
+
+                  <div id="workflowAgentGroup" class="workflow-agent-group">
+                    <article id="workflowClaude"
+                             class="workflow-node workflow-node-agent claude-lane"
+                             data-workflow-role="claude" aria-labelledby="claudeLaneTitle">
+                      <header class="lane-heading">
+                        <div>
+                          <span class="lane-symbol claude-symbol" aria-hidden="true">C</span>
+                          <div><p class="tag-label">Agent 01</p><h2 id="claudeLaneTitle">Claude</h2></div>
+                        </div>
+                        <span id="claudeCount" class="message-count" aria-label="Claude 메시지 수">0</span>
+                      </header>
+                      <p id="workflowClaudeStatus" class="workflow-node-status" role="status">대기 중</p>
+                      <div id="claudeMessages" class="lane-messages workflow-node-messages" aria-live="polite">
+                        <p class="empty-state">Claude의 현재 작업과 공개 결과가 표시됩니다.</p>
+                      </div>
+                    </article>
+
+                    <article id="workflowCodex"
+                             class="workflow-node workflow-node-agent codex-lane"
+                             data-workflow-role="codex" aria-labelledby="codexLaneTitle">
+                      <header class="lane-heading">
+                        <div>
+                          <span class="lane-symbol codex-symbol" aria-hidden="true">G</span>
+                          <div><p class="tag-label">Agent 02</p><h2 id="codexLaneTitle">ChatGPT</h2></div>
+                        </div>
+                        <span id="codexCount" class="message-count" aria-label="ChatGPT 메시지 수">0</span>
+                      </header>
+                      <p id="workflowCodexStatus" class="workflow-node-status" role="status">대기 중</p>
+                      <div id="codexMessages" class="lane-messages workflow-node-messages" aria-live="polite">
+                        <p class="empty-state">ChatGPT의 현재 작업과 공개 결과가 표시됩니다.</p>
+                      </div>
+                    </article>
+                  </div>
+
+                  <div id="workflowReturnLink" class="workflow-connector workflow-merge"
+                       aria-label="Agent 결과를 Orchestrator로 전달">
+                    <span class="workflow-line line-leg line-leg-left"></span>
+                    <span class="workflow-line line-leg line-leg-right"></span>
+                    <span class="workflow-line line-branch"></span>
+                    <span class="workflow-line line-trunk"></span>
+                    <span class="workflow-transfer-label">결과 회수</span>
+                  </div>
+
+                  <article id="workflowOrchestratorReturn"
+                           class="workflow-node workflow-node-orchestrator workflow-node-return"
+                           data-workflow-role="orchestrator-return" aria-labelledby="orchestratorReturnTitle">
+                    <header class="lane-heading">
+                      <div>
+                        <span class="lane-symbol orchestrator-symbol" aria-hidden="true">O</span>
+                        <div><p class="tag-label">Director · Synthesis</p><h2 id="orchestratorReturnTitle">Orchestrator 종합</h2></div>
+                      </div>
+                      <span class="workflow-return-badge">Final</span>
+                    </header>
+                    <p id="workflowReturnStatus" class="workflow-node-status" role="status">Agent 결과를 기다리고 있습니다.</p>
+                    <div id="orchestratorReturnMessages" class="lane-messages workflow-node-messages" aria-live="polite">
+                      <p class="empty-state">Agent 결과가 돌아오면 통합 판단이 이곳에 생성됩니다.</p>
+                    </div>
+                  </article>
                 </div>
-              </article>
+              </div>
             </section>
 
             <section id="artifactSection" class="artifact-section hidden" aria-labelledby="artifactTitle">
@@ -235,7 +368,15 @@
                   <p class="eyebrow">Validated output</p>
                   <h2 id="artifactTitle">구조화 산출물</h2>
                 </div>
-                <span id="artifactCount" class="message-count">0</span>
+                <div class="artifact-tools">
+                  <label for="artifactFilter" class="sr-only">산출물 표시 범위</label>
+                  <select id="artifactFilter" aria-label="산출물 표시 범위">
+                    <option value="final">최종 결과만</option>
+                    <option value="current">현재 Cycle</option>
+                    <option value="all">전체 기록</option>
+                  </select>
+                  <span id="artifactCount" class="message-count">0</span>
+                </div>
               </div>
               <div id="artifactList" class="artifact-list"></div>
             </section>

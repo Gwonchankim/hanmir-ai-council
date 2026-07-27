@@ -291,9 +291,9 @@ const synthesis = {
     },
     feedbackTraceability: {
       // 여러 피드백 cycle을 거치며 addressed ID를 계속 보존한다. Canonical
-      // 시나리오만 해도 기존 20개 + 신규 Q/FB 8개이므로 20개 상한은
-      // 의미 보존 규칙과 충돌한다.
-      type: 'array', maxItems: 40, items: {
+      // 실 E2E의 3번째 cycle은 이전 41개와 신규 3개를 동시에 요구한다.
+      // 누적 추적 정책과 충돌하지 않도록 충분한 상한을 두되 무제한 배열은 피한다.
+      type: 'array', maxItems: 100, items: {
         type: 'object', additionalProperties: false,
         required: ['feedbackId', 'status', 'evidence'],
         properties: {
@@ -314,7 +314,113 @@ const synthesis = {
   },
 };
 
-const schemas = Object.freeze({ harnessSet, taskPackage, draft, critique, revision, synthesis });
+const decisionFrame = {
+  type: 'object',
+  additionalProperties: false,
+  required: [
+    'schemaVersion', 'artifactType', 'cycle', 'decision', 'options', 'constraints',
+    'evidence', 'stakes', 'needsInput', 'clarifyingQuestion',
+  ],
+  properties: {
+    schemaVersion: { type: 'integer', const: 1 },
+    artifactType: { type: 'string', const: 'decision_frame' },
+    cycle: { type: 'integer', minimum: 1 },
+    decision: nonEmpty,
+    options: { type: 'array', minItems: 1, maxItems: 12, items: nonEmpty },
+    constraints: stringArray,
+    evidence: stringArray,
+    stakes: nonEmpty,
+    needsInput: { type: 'boolean' },
+    clarifyingQuestion: { type: 'string', maxLength: 2_000 },
+  },
+};
+
+const advisorAnalysis = {
+  type: 'object',
+  additionalProperties: false,
+  required: [
+    'schemaVersion', 'artifactType', 'cycle', 'advisor', 'headline', 'assessment',
+    'recommendation', 'keyRisks', 'keyOpportunities', 'firstAction',
+  ],
+  properties: {
+    schemaVersion: { type: 'integer', const: 1 },
+    artifactType: { type: 'string', const: 'advisor_analysis' },
+    cycle: { type: 'integer', minimum: 1 },
+    advisor: {
+      type: 'string',
+      enum: ['contrarian', 'firstPrinciples', 'expansionist', 'outsider', 'executor'],
+    },
+    headline: nonEmpty,
+    assessment: markdown,
+    recommendation: nonEmpty,
+    keyRisks: stringArray,
+    keyOpportunities: stringArray,
+    firstAction: nonEmpty,
+  },
+};
+
+const peerReview = {
+  type: 'object',
+  additionalProperties: false,
+  required: [
+    'schemaVersion', 'artifactType', 'cycle', 'reviewer', 'strongestResponse',
+    'strongestWhy', 'biggestBlindSpotResponse', 'biggestBlindSpot', 'allMissed',
+  ],
+  properties: {
+    schemaVersion: { type: 'integer', const: 1 },
+    artifactType: { type: 'string', const: 'peer_review' },
+    cycle: { type: 'integer', minimum: 1 },
+    reviewer: {
+      type: 'string',
+      enum: ['contrarian', 'firstPrinciples', 'expansionist', 'outsider', 'executor'],
+    },
+    strongestResponse: { type: 'string', enum: ['A', 'B', 'C', 'D', 'E'] },
+    strongestWhy: nonEmpty,
+    biggestBlindSpotResponse: { type: 'string', enum: ['A', 'B', 'C', 'D', 'E'] },
+    biggestBlindSpot: nonEmpty,
+    allMissed: nonEmpty,
+  },
+};
+
+const councilVerdict = {
+  type: 'object',
+  additionalProperties: false,
+  required: [
+    'schemaVersion', 'artifactType', 'cycle', 'planVersion', 'title', 'status',
+    'whereCouncilAgrees', 'whereCouncilClashes', 'blindSpots', 'recommendation',
+    'firstAction', 'confidence', 'planMarkdown', 'requiredQuestions', 'optionalQuestions',
+  ],
+  properties: {
+    schemaVersion: { type: 'integer', const: 1 },
+    artifactType: { type: 'string', const: 'council_verdict' },
+    cycle: { type: 'integer', minimum: 1 },
+    planVersion: { type: 'integer', minimum: 1 },
+    title: nonEmpty,
+    status: { type: 'string', const: 'ready_for_approval' },
+    whereCouncilAgrees: { type: 'array', minItems: 1, maxItems: 20, items: nonEmpty },
+    whereCouncilClashes: { type: 'array', minItems: 1, maxItems: 20, items: nonEmpty },
+    blindSpots: { type: 'array', minItems: 1, maxItems: 20, items: nonEmpty },
+    recommendation: nonEmpty,
+    firstAction: nonEmpty,
+    confidence: { type: 'string', enum: ['low', 'medium', 'high'] },
+    planMarkdown: markdown,
+    requiredQuestions: { type: 'array', maxItems: 0, items: question },
+    optionalQuestions: { type: 'array', maxItems: 5, items: question },
+  },
+};
+
+const schemas = Object.freeze({
+  harnessSet,
+  taskPackage,
+  draft,
+  critique,
+  revision,
+  synthesis,
+  decisionFrame,
+  advisorAnalysis,
+  peerReview,
+  councilVerdict,
+});
 const ajv = new Ajv({ allErrors: true, strict: false });
 const validators = Object.fromEntries(Object.entries(schemas).map(([name, schema]) => [name, ajv.compile(schema)]));
 

@@ -125,7 +125,7 @@ test('Claude passes prompt via stdin, resumes the role session and discards priv
     '{"type":"system","subtype":"init","session_id":"claude-session"}\r\n',
     '{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"SECRET_REASONING_CANARY"},',
     '{"type":"redacted_thinking","data":"SECRET_REASONING_CANARY"},{"type":"text","text":"공개 답변"}]}}\n',
-    '{"type":"result","subtype":"success","is_error":false,"session_id":"claude-session","result":"공개 답변"}',
+    '{"type":"result","subtype":"success","is_error":false,"session_id":"claude-session","result":"공개 답변","usage":{"input_tokens":12,"output_tokens":7},"total_cost_usd":0.003}',
   ];
 
   const result = await runClaude({
@@ -144,6 +144,7 @@ test('Claude passes prompt via stdin, resumes the role session and discards priv
   assert.equal(capture.captureStdout, false);
   assert.equal(result.text, '공개 답변');
   assert.equal(result.sessionId, 'claude-session');
+  assert.deepEqual(result.usage, { input_tokens: 12, output_tokens: 7, total_cost_usd: 0.003 });
   assert.deepEqual(result.execution, {
     provider: 'claude', executable: 'fake-claude', exitCode: 0,
     completionEvent: 'result', resumed: true, model: 'sonnet', effort: 'high',
@@ -285,6 +286,7 @@ test('Codex passes prompt via stdin, resumes thread and discards reasoning items
   assert.equal(capture.args[capture.args.indexOf('-m') + 1], 'gpt-test');
   assert.equal(result.text, '최종 기획안');
   assert.equal(result.threadId, 'thread-new');
+  assert.deepEqual(result.usage, { input_tokens: 10, output_tokens: 5 });
   assert.deepEqual(result.execution, {
     provider: 'codex', executable: 'fake-codex', exitCode: 0,
     completionEvent: 'turn.completed', resumed: true, model: 'gpt-test', effort: 'medium',

@@ -19,6 +19,7 @@ const ui = {
   mobileInsightsTab: byId('mobileInsightsTab'),
   conversationPanel: byId('councilConversationPanel'),
   workspace: byId('councilWorkspace'),
+  brandSubtitle: byId('brandSubtitle'),
   connectionBadge: byId('connectionBadge'),
   remoteModeBadge: byId('remoteModeBadge'),
   phasePill: byId('phasePill'),
@@ -28,17 +29,50 @@ const ui = {
   globalError: byId('globalError'),
   ticker: byId('ticker'),
   activityLog: byId('activityLog'),
+  workflowPanel: byId('workflowPanel'),
+  workflowViewport: byId('workflowViewport'),
+  workflowFollow: byId('workflowFollow'),
+  workflowFollowLabel: byId('workflowFollowLabel'),
+  workflowDescription: byId('workflowDescription'),
+  workflowMetrics: byId('workflowMetrics'),
+  workflowCycles: byId('workflowCycles'),
+  workflowIngress: byId('workflowIngress'),
+  workflowOrchestratorTop: byId('workflowOrchestratorTop'),
+  workflowDispatchLink: byId('workflowDispatchLink'),
+  workflowAgentGroup: byId('workflowAgentGroup'),
+  workflowClaude: byId('workflowClaude'),
+  workflowCodex: byId('workflowCodex'),
+  workflowReturnLink: byId('workflowReturnLink'),
+  workflowOrchestratorReturn: byId('workflowOrchestratorReturn'),
+  workflowOrchestratorStatus: byId('workflowOrchestratorStatus'),
+  workflowClaudeStatus: byId('workflowClaudeStatus'),
+  workflowCodexStatus: byId('workflowCodexStatus'),
+  workflowReturnStatus: byId('workflowReturnStatus'),
+  orchestratorReturnMessages: byId('orchestratorReturnMessages'),
   toggleSetup: byId('toggleSetup'),
   setupBody: byId('setupBody'),
   applySession: byId('applySession'),
   configHint: byId('configHint'),
+  councilMode: byId('councilMode'),
+  decisionCouncilConfig: byId('decisionCouncilConfig'),
+  councilPreset: byId('councilPreset'),
+  councilMaxParallel: byId('councilMaxParallel'),
+  councilRoleGrid: byId('councilRoleGrid'),
+  planningConfigCards: [...document.querySelectorAll('.planning-config-card')],
   orcBrain: byId('orcBrain'),
   orcModel: byId('orcModel'),
   orcEffort: byId('orcEffort'),
+  orcFallbackBrain: byId('orcFallbackBrain'),
+  orcFallbackModel: byId('orcFallbackModel'),
+  orcFallbackEffort: byId('orcFallbackEffort'),
   clModel: byId('clModel'),
   clEffort: byId('clEffort'),
+  clFallbackModel: byId('clFallbackModel'),
+  clFallbackEffort: byId('clFallbackEffort'),
   cxModel: byId('cxModel'),
   cxEffort: byId('cxEffort'),
+  cxFallbackModel: byId('cxFallbackModel'),
+  cxFallbackEffort: byId('cxFallbackEffort'),
   userMessages: byId('userMessages'),
   orchestratorMessages: byId('orchestratorMessages'),
   claudeMessages: byId('claudeMessages'),
@@ -49,6 +83,7 @@ const ui = {
   codexCount: byId('codexCount'),
   artifactSection: byId('artifactSection'),
   artifactList: byId('artifactList'),
+  artifactFilter: byId('artifactFilter'),
   artifactCount: byId('artifactCount'),
   inspectorPanel: byId('inspectorPanel'),
   expandAllInspector: byId('expandAllInspector'),
@@ -104,6 +139,10 @@ const PHASE_LABELS = {
   dispatching: '과업 배분',
   dispatch: '과업 배분',
   harnessing: 'Harness 설계',
+  framing: '질문 정리',
+  independent_analysis: '5개 독립 분석',
+  anonymous_peer_review: '익명 동료평가',
+  chair_synthesis: '의장 종합',
   r0_drafting: '초안 작성',
   drafting: '초안 작성',
   r0: '초안 작성',
@@ -135,6 +174,7 @@ const BUSY_PHASES = new Set([
   'decomposing', 'dispatch', 'dispatching', 'harnessing', 'r0_drafting', 'drafting', 'r0',
   'r1_critiquing', 'critiquing', 'r1', 'r2_revising', 'revising', 'r2',
   'synthesizing', 'synthesis', 'running', 'cancelling',
+  'framing', 'independent_analysis', 'anonymous_peer_review', 'chair_synthesis',
 ]);
 const FEEDBACK_PHASES = new Set([
   'waiting_user_input', 'waiting_input', 'awaiting_input', 'waiting_approval', 'awaiting_approval', 'awaiting_user',
@@ -191,8 +231,17 @@ const app = {
   inspectorExpanded: false,
   seenEvents: new Set(),
   renderedMessages: new Set(),
+  renderedWorkflowReturns: new Set(),
+  workflowFollowEnabled: true,
+  workflowProgrammaticScroll: false,
+  workflowFollowTimer: null,
+  workflowTarget: 'workflowOrchestratorTop',
+  workflowReplay: false,
+  workflowRoleState: { orchestrator: 'idle', claude: 'idle', codex: 'idle', return: 'idle' },
+  workflowEvents: [],
   renderedArtifacts: new Set(),
   counts: { user: 0, orchestrator: 0, claude: 0, codex: 0, artifact: 0 },
+  councilRoleControls: {},
 };
 
 function escapeHtml(value) {
@@ -395,6 +444,7 @@ function normalizeProvider(raw = {}) {
 function normalizeOptions(payload = {}) {
   const source = payload.options || payload.providers || payload.models || payload;
   return {
+    modes: optionEntries(source.modes || ['planning', 'decision_council']),
     claude: normalizeProvider(source.claude || source.anthropic || {}),
     codex: normalizeProvider(source.codex || source.chatgpt || source.openai || {}),
     preflight: payload.preflight || payload.readiness || source.preflight || null,
@@ -420,12 +470,292 @@ function providerOptions(brain) {
   return app.options?.[brain === 'codex' ? 'codex' : 'claude'] || normalizeProvider();
 }
 
+const COUNCIL_ROLE_META = Object.freeze({
+  contrarian: {
+    label: 'Contrarian',
+    description: '실패 가능성, 결함과 누락된 전제를 찾습니다.',
+  },
+  firstPrinciples: {
+    label: 'First Principles',
+    description: '가정을 제거하고 실제 문제를 다시 정의합니다.',
+  },
+  expansionist: {
+    label: 'Expansionist',
+    description: '확장성, 상방과 인접 기회를 탐색합니다.',
+  },
+  outsider: {
+    label: 'Outsider',
+    description: '처음 보는 사람의 이해 가능성을 점검합니다.',
+  },
+  executor: {
+    label: 'Executor',
+    description: '실행 현실성과 가장 빠른 첫 행동을 결정합니다.',
+  },
+  chair: {
+    label: 'Council Chair',
+    description: '다수결이 아닌 논리의 질로 최종 판단을 종합합니다.',
+  },
+});
+
+function createSelect(className, labelText) {
+  const label = document.createElement('label');
+  label.textContent = labelText;
+  const select = document.createElement('select');
+  select.className = className;
+  label.append(select);
+  return { label, select };
+}
+
+function fillBrainSelect(select, selected, { optional = false } = {}) {
+  select.replaceChildren();
+  if (optional) {
+    const none = document.createElement('option');
+    none.value = '';
+    none.textContent = '사용 안 함';
+    select.append(none);
+  }
+  [['claude', 'Claude'], ['codex', 'ChatGPT (Codex)']].forEach(([value, label]) => {
+    const option = document.createElement('option');
+    option.value = value;
+    option.textContent = label;
+    select.append(option);
+  });
+  select.value = selected || (optional ? '' : 'codex');
+}
+
+function refreshRouteControls(routeControls, route = {}) {
+  fillBrainSelect(routeControls.brain, route.brain || route.provider, { optional: routeControls.optional });
+  const brain = routeControls.brain.value;
+  const provider = providerOptions(brain || 'codex');
+  fillSelect(routeControls.model, provider.models, route.model, provider.defaultModel);
+  fillSelect(routeControls.effort, provider.efforts, route.effort, provider.defaultEffort);
+  const enabled = Boolean(brain);
+  routeControls.model.disabled = !enabled;
+  routeControls.effort.disabled = !enabled;
+}
+
+function createRouteControls(card, prefix, optional = false) {
+  const heading = document.createElement('h4');
+  heading.textContent = optional ? '대체 모델' : '주 모델';
+  const pair = document.createElement('div');
+  pair.className = 'route-pair';
+  const brain = createSelect(`${prefix}-brain`, 'Provider');
+  const model = createSelect(`${prefix}-model`, 'Model');
+  const effort = createSelect(`${prefix}-effort`, 'Effort');
+  pair.append(brain.label, model.label);
+  card.append(heading, pair, effort.label);
+  const controls = {
+    brain: brain.select,
+    model: model.select,
+    effort: effort.select,
+    optional,
+  };
+  controls.brain.addEventListener('change', () => refreshRouteControls(controls, {
+    brain: controls.brain.value,
+  }));
+  return controls;
+}
+
+function ensureCouncilRoleControls() {
+  if (Object.keys(app.councilRoleControls).length) return;
+  Object.entries(COUNCIL_ROLE_META).forEach(([key, meta]) => {
+    const card = document.createElement('section');
+    card.className = 'config-card council-route-card';
+    const title = document.createElement('h3');
+    title.className = 'config-card-title';
+    title.textContent = meta.label;
+    const description = document.createElement('p');
+    description.textContent = meta.description;
+    card.append(title, description);
+    const primary = createRouteControls(card, `${key}-primary`, false);
+    const fallbackHeading = document.createElement('div');
+    fallbackHeading.className = 'fallback-heading';
+    const fallbackTitle = document.createElement('h4');
+    fallbackTitle.textContent = 'Fallback 순서';
+    const addFallback = document.createElement('button');
+    addFallback.type = 'button';
+    addFallback.className = 'button ghost compact add-fallback';
+    addFallback.textContent = '+ 경로 추가';
+    fallbackHeading.append(fallbackTitle, addFallback);
+    const fallbackList = document.createElement('div');
+    fallbackList.className = 'fallback-list';
+    card.append(fallbackHeading, fallbackList);
+    ui.councilRoleGrid.append(card);
+    app.councilRoleControls[key] = {
+      card, primary, fallbacks: [], fallbackList, addFallback,
+    };
+    addFallback.addEventListener('click', () => addCouncilFallback(key));
+  });
+}
+
+function addCouncilFallback(key, route = {}) {
+  const role = app.councilRoleControls[key];
+  if (!role || role.fallbacks.length >= 5) return;
+  const fallbackRoute = route.brain || route.provider
+    ? route
+    : {
+      brain: role.primary.brain.value === 'claude' ? 'codex' : 'claude',
+      effort: role.primary.effort.value || 'medium',
+    };
+  const index = role.fallbacks.length;
+  const row = document.createElement('div');
+  row.className = 'fallback-route';
+  const controls = createRouteControls(row, `${key}-fallback-${index}`, true);
+  const remove = document.createElement('button');
+  remove.type = 'button';
+  remove.className = 'text-link remove-fallback';
+  remove.textContent = '이 경로 제거';
+  remove.addEventListener('click', () => {
+    const position = role.fallbacks.indexOf(controls);
+    if (position >= 0) role.fallbacks.splice(position, 1);
+    row.remove();
+    role.addFallback.disabled = role.fallbacks.length >= 5;
+    updateControls();
+  });
+  row.append(remove);
+  role.fallbackList.append(row);
+  controls.row = row;
+  controls.remove = remove;
+  role.fallbacks.push(controls);
+  refreshRouteControls(controls, fallbackRoute);
+  role.addFallback.disabled = role.fallbacks.length >= 5;
+  return controls;
+}
+
+function clearCouncilFallbacks(role) {
+  role.fallbacks = [];
+  role.fallbackList.replaceChildren();
+  role.addFallback.disabled = false;
+}
+
+function renderCouncilMode() {
+  const decision = ui.councilMode.value === 'decision_council';
+  ui.decisionCouncilConfig.classList.toggle('hidden', !decision);
+  ui.planningConfigCards.forEach((card) => card.classList.toggle('hidden', decision));
+  if (ui.brandSubtitle) {
+    ui.brandSubtitle.textContent = decision
+      ? '서로 다른 다섯 관점이 독립 분석과 익명 평가를 거쳐 중요한 결정을 검증합니다.'
+      : 'Orchestrator와 두 워커가 하나의 기획안을 함께 만듭니다.';
+  }
+}
+
+function renderCouncilConfig(council = {}) {
+  ensureCouncilRoleControls();
+  if (ui.councilPreset) ui.councilPreset.value = '';
+  ui.councilMaxParallel.value = String(council.maxParallel || 3);
+  Object.entries(app.councilRoleControls).forEach(([key, controls]) => {
+    const route = key === 'chair' ? council.chair : council.advisors?.[key];
+    refreshRouteControls(controls.primary, route || {});
+    clearCouncilFallbacks(controls);
+    (route?.fallbacks || []).forEach((fallback) => addCouncilFallback(key, fallback));
+  });
+}
+
+function preferredModel(brain, candidates = []) {
+  const provider = providerOptions(brain);
+  const values = optionEntries(provider.models).map((item) => item.value);
+  return candidates.find((candidate) => values.includes(candidate))
+    || provider.defaultModel
+    || values[0];
+}
+
+function applyCouncilPreset(name) {
+  if (!name) return;
+  ensureCouncilRoleControls();
+  const claudeLow = preferredModel('claude', ['claude-haiku-4-5-20251001']);
+  const claudeQuality = preferredModel('claude', ['fable', 'opus', 'sonnet']);
+  const claudeBalanced = preferredModel('claude', ['sonnet', 'opus']);
+  const codexDefault = preferredModel('codex', ['gpt-5.6-terra', 'gpt-5.6-sol']);
+  const codexQuality = preferredModel('codex', ['gpt-5.6-sol', 'gpt-5.6-terra']);
+  const codexLow = preferredModel('codex', ['gpt-5.6-luna', 'gpt-5.6-terra']);
+  const roleKeys = Object.keys(app.councilRoleControls);
+  roleKeys.forEach((key, index) => {
+    const role = app.councilRoleControls[key];
+    let primary;
+    let fallback;
+    if (name === 'codex_primary') {
+      primary = { brain: 'codex', model: key === 'chair' ? codexQuality : codexDefault, effort: key === 'chair' ? 'medium' : 'low' };
+      fallback = { brain: 'claude', model: claudeLow, effort: 'low' };
+    } else if (name === 'low_cost') {
+      const brain = index % 2 ? 'codex' : 'claude';
+      primary = {
+        brain,
+        model: brain === 'claude' ? claudeLow : codexLow,
+        effort: 'low',
+      };
+      fallback = {
+        brain: brain === 'claude' ? 'codex' : 'claude',
+        model: brain === 'claude' ? codexLow : claudeLow,
+        effort: 'low',
+      };
+    } else if (name === 'quality') {
+      const brain = index % 2 ? 'codex' : 'claude';
+      primary = {
+        brain,
+        model: brain === 'claude' ? claudeQuality : codexQuality,
+        effort: 'high',
+      };
+      fallback = {
+        brain: brain === 'claude' ? 'codex' : 'claude',
+        model: brain === 'claude' ? codexQuality : claudeQuality,
+        effort: 'high',
+      };
+    } else {
+      const brain = index % 2 ? 'codex' : 'claude';
+      primary = {
+        brain,
+        model: brain === 'claude' ? claudeBalanced : codexDefault,
+        effort: key === 'chair' ? 'high' : 'medium',
+      };
+      fallback = {
+        brain: brain === 'claude' ? 'codex' : 'claude',
+        model: brain === 'claude' ? codexDefault : claudeBalanced,
+        effort: key === 'chair' ? 'high' : 'medium',
+      };
+    }
+    refreshRouteControls(role.primary, primary);
+    clearCouncilFallbacks(role);
+    addCouncilFallback(key, fallback);
+  });
+  ui.councilMaxParallel.value = name === 'quality' ? '2' : '3';
+}
+
 function refreshOrchestratorOptions(config = null) {
   const provider = providerOptions(ui.orcBrain.value);
   const currentModel = config?.model || ui.orcModel.value;
   const currentEffort = config?.effort || ui.orcEffort.value;
   fillSelect(ui.orcModel, provider.models, currentModel, provider.defaultModel);
   fillSelect(ui.orcEffort, provider.efforts, currentEffort, provider.defaultEffort);
+}
+
+function refreshLegacyFallbacks(config = {}) {
+  const orchestratorFallback = config.orchestrator?.fallbacks?.[0] || {};
+  ui.orcFallbackBrain.value = orchestratorFallback.brain || '';
+  const orchestratorProvider = providerOptions(ui.orcFallbackBrain.value || 'codex');
+  fillSelect(
+    ui.orcFallbackModel,
+    orchestratorProvider.models,
+    orchestratorFallback.model,
+    orchestratorProvider.defaultModel,
+  );
+  fillSelect(
+    ui.orcFallbackEffort,
+    orchestratorProvider.efforts,
+    orchestratorFallback.effort,
+    orchestratorProvider.defaultEffort,
+  );
+  ui.orcFallbackModel.disabled = !ui.orcFallbackBrain.value;
+  ui.orcFallbackEffort.disabled = !ui.orcFallbackBrain.value;
+
+  const claudeFallback = config.claudeWorker?.fallbacks?.[0] || {};
+  const codex = providerOptions('codex');
+  fillSelect(ui.clFallbackModel, codex.models, claudeFallback.model, codex.defaultModel);
+  fillSelect(ui.clFallbackEffort, codex.efforts, claudeFallback.effort, codex.defaultEffort);
+
+  const codexFallback = config.codexWorker?.fallbacks?.[0] || {};
+  const claude = providerOptions('claude');
+  fillSelect(ui.cxFallbackModel, claude.models, codexFallback.model, claude.defaultModel);
+  fillSelect(ui.cxFallbackEffort, claude.efforts, codexFallback.effort, claude.defaultEffort);
 }
 
 function renderConfig(config = {}) {
@@ -442,13 +772,75 @@ function renderConfig(config = {}) {
   fillSelect(ui.clEffort, claude.efforts, claudeWorker.effort, claude.defaultEffort);
   fillSelect(ui.cxModel, codex.models, codexWorker.model, codex.defaultModel);
   fillSelect(ui.cxEffort, codex.efforts, codexWorker.effort, codex.defaultEffort);
+  refreshLegacyFallbacks(config);
+  ui.councilMode.value = config.mode === 'decision_council' ? 'decision_council' : 'planning';
+  renderCouncilConfig(config.council || {});
+  renderCouncilMode();
+}
+
+function gatherRoute(controls) {
+  return {
+    brain: controls.brain.value,
+    model: controls.model.value,
+    effort: controls.effort.value,
+  };
 }
 
 function gatherConfig() {
+  const advisors = {};
+  Object.entries(app.councilRoleControls).forEach(([key, controls]) => {
+    const primary = gatherRoute(controls.primary);
+    const fallbacks = controls.fallbacks
+      .filter((fallback) => fallback.brain.value)
+      .map(gatherRoute);
+    const route = { ...primary, fallbacks };
+    if (key === 'chair') return;
+    advisors[key] = route;
+  });
+  const chairControls = app.councilRoleControls.chair;
+  const chairFallbacks = (chairControls?.fallbacks || [])
+    .filter((fallback) => fallback.brain.value)
+    .map(gatherRoute);
   return {
-    orchestrator: { brain: ui.orcBrain.value, model: ui.orcModel.value, effort: ui.orcEffort.value },
-    claudeWorker: { model: ui.clModel.value, effort: ui.clEffort.value },
-    codexWorker: { model: ui.cxModel.value, effort: ui.cxEffort.value },
+    mode: ui.councilMode.value,
+    orchestrator: {
+      brain: ui.orcBrain.value,
+      model: ui.orcModel.value,
+      effort: ui.orcEffort.value,
+      fallbacks: ui.orcFallbackBrain.value ? [{
+        brain: ui.orcFallbackBrain.value,
+        model: ui.orcFallbackModel.value,
+        effort: ui.orcFallbackEffort.value,
+      }] : [],
+    },
+    claudeWorker: {
+      brain: 'claude',
+      model: ui.clModel.value,
+      effort: ui.clEffort.value,
+      fallbacks: [{
+        brain: 'codex',
+        model: ui.clFallbackModel.value,
+        effort: ui.clFallbackEffort.value,
+      }],
+    },
+    codexWorker: {
+      brain: 'codex',
+      model: ui.cxModel.value,
+      effort: ui.cxEffort.value,
+      fallbacks: [{
+        brain: 'claude',
+        model: ui.cxFallbackModel.value,
+        effort: ui.cxFallbackEffort.value,
+      }],
+    },
+    council: {
+      maxParallel: Number(ui.councilMaxParallel.value) || 3,
+      advisors,
+      chair: {
+        ...(chairControls ? gatherRoute(chairControls.primary) : {}),
+        fallbacks: chairFallbacks,
+      },
+    },
   };
 }
 
@@ -464,6 +856,492 @@ function renderPreflight() {
     : 'Claude와 Codex CLI 준비 상태가 확인되었습니다.';
 }
 
+const WORKFLOW_TOP_PHASES = new Set([
+  'configuring', 'ready', 'idle', 'running', 'harnessing', 'decomposing', 'dispatch', 'dispatching', 'framing',
+]);
+const WORKFLOW_AGENT_PHASES = new Set([
+  'r0_drafting', 'drafting', 'r0', 'r1_critiquing', 'critiquing', 'r1',
+  'r2_revising', 'revising', 'r2', 'independent_analysis', 'anonymous_peer_review',
+]);
+const WORKFLOW_RETURN_PHASES = new Set([
+  'synthesizing', 'synthesis', 'chair_synthesis', 'waiting_user_input', 'awaiting_input',
+  'waiting_input', 'waiting_approval', 'awaiting_approval', 'awaiting_user',
+  'approved', 'done', 'completed',
+]);
+
+function setWorkflowFollow(enabled) {
+  app.workflowFollowEnabled = Boolean(enabled);
+  ui.workflowFollow?.setAttribute('aria-pressed', String(app.workflowFollowEnabled));
+  if (ui.workflowFollowLabel) {
+    ui.workflowFollowLabel.textContent = app.workflowFollowEnabled
+      ? '현재 단계 자동 추적'
+      : '현재 단계로 이동';
+  }
+}
+
+const WORKFLOW_ADVISORS = Object.freeze({
+  contrarian: { label: 'Contrarian', glyph: 'C', caption: '실패·위험' },
+  firstPrinciples: { label: 'First Principles', glyph: 'F', caption: '문제 재정의' },
+  expansionist: { label: 'Expansionist', glyph: 'E', caption: '상방·확장' },
+  outsider: { label: 'Outsider', glyph: 'O', caption: '외부자 이해' },
+  executor: { label: 'Executor', glyph: 'X', caption: '실행 가능성' },
+});
+
+function workflowEventArtifact(event) {
+  return event?.artifact && typeof event.artifact === 'object' ? event.artifact : null;
+}
+
+function workflowArtifactType(event) {
+  return textFrom(event?.artifactType || workflowEventArtifact(event)?.artifactType).toLowerCase();
+}
+
+function workflowModelLabel(events) {
+  const routed = [...events].reverse().find((event) => event.modelRoute || event.fallback?.to);
+  const route = routed?.modelRoute || routed?.fallback?.to;
+  if (!route) return '';
+  return `${route.brain === 'codex' ? 'ChatGPT' : 'Claude'} · ${route.model}`;
+}
+
+function workflowNodeSummary(events) {
+  const values = [];
+  for (const event of [...events].reverse()) {
+    const artifact = workflowEventArtifact(event);
+    const text = artifact ? summaryNarrative(artifact) : publicContent(event);
+    const clean = textFrom(text).replace(/\s+/g, ' ').trim();
+    if (!clean || values.some((value) => (
+      value === clean || value.slice(0, 100) === clean.slice(0, 100)
+    ))) continue;
+    values.push(clean.length > 220 ? `${clean.slice(0, 217)}…` : clean);
+    if (values.length === 2) break;
+  }
+  return values;
+}
+
+function workflowStateLabel(state) {
+  return {
+    active: '진행 중',
+    complete: '완료',
+    error: '확인 필요',
+    idle: '대기',
+  }[state] || '대기';
+}
+
+function createWorkflowCycleNode({
+  key, label, caption, glyph, events, state = 'idle', progress = '', accent = '',
+}) {
+  const node = document.createElement('article');
+  node.className = `workflow-cycle-node${accent ? ` ${accent}` : ''}`;
+  node.dataset.workflowNode = key;
+  node.dataset.workflowState = state;
+  node.classList.toggle('is-active', state === 'active');
+  node.classList.toggle('is-complete', state === 'complete');
+  node.classList.toggle('is-error', state === 'error');
+  if (state === 'active') node.dataset.currentWorkflowTarget = 'true';
+
+  const head = document.createElement('header');
+  head.className = 'workflow-cycle-node-head';
+  const symbol = document.createElement('span');
+  symbol.className = 'workflow-cycle-symbol';
+  symbol.textContent = glyph;
+  symbol.setAttribute('aria-hidden', 'true');
+  const copy = document.createElement('div');
+  const eyebrow = document.createElement('p');
+  eyebrow.className = 'tag-label';
+  eyebrow.textContent = caption;
+  const title = document.createElement('h3');
+  title.textContent = label;
+  copy.append(eyebrow, title);
+  const badges = document.createElement('div');
+  badges.className = 'workflow-cycle-badges';
+  const status = document.createElement('span');
+  status.className = `workflow-state-badge is-${state}`;
+  status.textContent = progress || workflowStateLabel(state);
+  badges.append(status);
+  const model = workflowModelLabel(events);
+  if (model) {
+    const modelBadge = document.createElement('span');
+    modelBadge.className = 'workflow-model-badge';
+    modelBadge.textContent = model;
+    badges.append(modelBadge);
+  }
+  if (events.some((event) => event.fallback)) {
+    const fallback = document.createElement('span');
+    fallback.className = 'workflow-fallback-badge';
+    fallback.textContent = 'Fallback';
+    badges.append(fallback);
+  }
+  head.append(symbol, copy, badges);
+  node.append(head);
+
+  const summaries = workflowNodeSummary(events);
+  const list = document.createElement('ul');
+  list.className = 'workflow-cycle-summary';
+  if (!summaries.length) {
+    const item = document.createElement('li');
+    item.className = 'none';
+    item.textContent = state === 'active' ? '작업 시작을 준비하고 있습니다.' : '아직 공개된 결과가 없습니다.';
+    list.append(item);
+  } else {
+    summaries.forEach((value) => {
+      const item = document.createElement('li');
+      item.textContent = value;
+      list.append(item);
+    });
+  }
+  node.append(list);
+  return node;
+}
+
+function workflowConnector(label, flowing = false) {
+  const connector = document.createElement('div');
+  connector.className = `workflow-cycle-connector${flowing ? ' is-flowing' : ''}`;
+  const copy = document.createElement('small');
+  copy.textContent = label;
+  connector.append(copy);
+  return connector;
+}
+
+function eventsForLogicalRole(events, logicalRole) {
+  return events.filter((event) => event.logicalRole === logicalRole);
+}
+
+function renderDecisionCycleBody(container, events, phase) {
+  const frameEvents = events.filter((event) => (
+    event.logicalRole === 'councilFramer' || workflowArtifactType(event) === 'decision_frame'
+  ));
+  const frameComplete = frameEvents.some((event) => workflowArtifactType(event) === 'decision_frame');
+  container.append(createWorkflowCycleNode({
+    key: 'framer',
+    label: 'Council Framer',
+    caption: '질문 중립화',
+    glyph: 'F',
+    events: frameEvents,
+    state: frameComplete ? 'complete' : phase === 'framing' ? 'active' : 'idle',
+    accent: 'orchestrator-accent',
+  }));
+  container.append(workflowConnector('동일한 질문을 5개 관점에 전달', phase === 'independent_analysis'));
+
+  const advisorGrid = document.createElement('div');
+  advisorGrid.className = 'workflow-advisor-grid';
+  let analysisCount = 0;
+  let reviewCount = 0;
+  Object.entries(WORKFLOW_ADVISORS).forEach(([key, meta]) => {
+    const advisorEvents = events.filter((event) => {
+      const artifact = workflowEventArtifact(event);
+      return event.logicalRole === `councilAdvisor:${key}`
+        || event.logicalRole === `councilReviewer:${key}`
+        || artifact?.advisor === key
+        || artifact?.reviewer === key;
+    });
+    const analysisDone = advisorEvents.some((event) => workflowArtifactType(event) === 'advisor_analysis');
+    const reviewDone = advisorEvents.some((event) => workflowArtifactType(event) === 'peer_review');
+    if (analysisDone) analysisCount += 1;
+    if (reviewDone) reviewCount += 1;
+    const active = (phase === 'independent_analysis' && !analysisDone)
+      || (phase === 'anonymous_peer_review' && analysisDone && !reviewDone);
+    advisorGrid.append(createWorkflowCycleNode({
+      key,
+      label: meta.label,
+      caption: meta.caption,
+      glyph: meta.glyph,
+      events: advisorEvents,
+      state: reviewDone ? 'complete' : active ? 'active' : analysisDone ? 'complete' : 'idle',
+      progress: reviewDone ? '분석·평가 완료' : analysisDone ? '분석 완료' : active ? '진행 중' : '대기',
+      accent: 'advisor-accent',
+    }));
+  });
+  const progress = document.createElement('div');
+  progress.className = 'workflow-progress-strip';
+  progress.innerHTML = `<span>독립 분석 <strong>${analysisCount}/5</strong></span><span>익명 평가 <strong>${reviewCount}/5</strong></span>`;
+  container.append(progress, advisorGrid);
+  container.append(workflowConnector('익명 평가 결과를 Chair에게 전달', phase === 'anonymous_peer_review' || phase === 'chair_synthesis'));
+
+  const chairEvents = events.filter((event) => (
+    event.logicalRole === 'councilChair'
+    || ['council_verdict', 'council_reports'].includes(workflowArtifactType(event))
+  ));
+  const verdictDone = chairEvents.some((event) => workflowArtifactType(event) === 'council_verdict');
+  container.append(createWorkflowCycleNode({
+    key: 'chair',
+    label: 'Council Chair',
+    caption: '최종 종합 판단',
+    glyph: 'O',
+    events: chairEvents,
+    state: verdictDone ? 'complete' : phase === 'chair_synthesis' ? 'active' : 'idle',
+    accent: 'orchestrator-accent',
+  }));
+}
+
+function renderPlanningCycleBody(container, events, phase) {
+  const topEvents = events.filter((event) => (
+    event.role === 'orchestrator'
+    && !['synthesis', 'council_verdict'].includes(workflowArtifactType(event))
+  ));
+  const workerEvents = (role) => events.filter((event) => (
+    event.role === role && !String(event.logicalRole || '').startsWith('council')
+  ));
+  const finalEvents = events.filter((event) => (
+    event.role === 'orchestrator'
+    && ['synthesis', 'council_verdict'].includes(workflowArtifactType(event))
+  ));
+  const agentBusy = WORKFLOW_AGENT_PHASES.has(phase);
+  const returning = WORKFLOW_RETURN_PHASES.has(phase);
+  container.append(createWorkflowCycleNode({
+    key: 'orchestrator',
+    label: 'Orchestrator',
+    caption: 'Harness · 과업 배분',
+    glyph: 'O',
+    events: topEvents,
+    state: agentBusy || returning ? 'complete' : WORKFLOW_TOP_PHASES.has(phase) ? 'active' : 'idle',
+    accent: 'orchestrator-accent',
+  }));
+  container.append(workflowConnector('두 Agent에게 병렬 전달', agentBusy));
+  const grid = document.createElement('div');
+  grid.className = 'workflow-worker-grid';
+  for (const [role, label, glyph] of [['claude', 'Claude', 'C'], ['codex', 'ChatGPT', 'G']]) {
+    const roleEvents = workerEvents(role);
+    const complete = roleEvents.some((event) => ARTIFACT_KINDS.has(normalizeKind(event)));
+    grid.append(createWorkflowCycleNode({
+      key: role,
+      label,
+      caption: role === 'claude' ? 'Agent 01' : 'Agent 02',
+      glyph,
+      events: roleEvents,
+      state: returning ? 'complete' : agentBusy && !complete ? 'active' : complete ? 'complete' : 'idle',
+      accent: role === 'claude' ? 'claude-accent' : 'codex-accent',
+    }));
+  }
+  container.append(grid, workflowConnector('Agent 결과 회수', returning));
+  const synthesisDone = finalEvents.some((event) => workflowArtifactType(event) === 'synthesis');
+  container.append(createWorkflowCycleNode({
+    key: 'synthesis',
+    label: 'Orchestrator 종합',
+    caption: '통합 결과',
+    glyph: 'O',
+    events: finalEvents,
+    state: synthesisDone ? 'complete' : returning ? 'active' : 'idle',
+    accent: 'orchestrator-accent',
+  }));
+}
+
+function renderWorkflowMetrics() {
+  if (!ui.workflowMetrics) return;
+  const serverTotals = app.state?.modelRouting?.totals || {};
+  const eventUsages = app.workflowEvents.filter((event) => event.usage);
+  const eventTotals = eventUsages.reduce((totals, event) => {
+    const usage = event.usage || {};
+    totals.calls += 1;
+    totals.input += Number(usage.input_tokens ?? usage.inputTokens) || 0;
+    totals.output += Number(usage.output_tokens ?? usage.outputTokens) || 0;
+    totals.cost += Number(usage.total_cost_usd ?? usage.costUsd) || 0;
+    return totals;
+  }, { calls: 0, input: 0, output: 0, cost: 0 });
+  const calls = Math.max(Number(serverTotals.calls) || 0, eventTotals.calls);
+  const input = Math.max(Number(serverTotals.inputTokens) || 0, eventTotals.input);
+  const output = Math.max(Number(serverTotals.outputTokens) || 0, eventTotals.output);
+  const fallbacks = Math.max(
+    Number(app.state?.modelRouting?.fallbackCount) || 0,
+    app.workflowEvents.filter((event) => event.fallback).length,
+  );
+  const circuits = Math.max(
+    app.state?.modelRouting?.circuits?.length || 0,
+    new Set(app.workflowEvents.filter((event) => event.circuit).map((event) => event.circuit.key)).size,
+  );
+  ui.workflowMetrics.replaceChildren();
+  [
+    ['호출', calls],
+    ['토큰', input + output ? `${(input + output).toLocaleString()}` : '—'],
+    ['Fallback', fallbacks],
+    ['차단', circuits],
+  ].forEach(([label, value]) => {
+    const item = document.createElement('span');
+    item.innerHTML = `${escapeHtml(label)} <strong>${escapeHtml(value)}</strong>`;
+    ui.workflowMetrics.append(item);
+  });
+}
+
+function renderWorkflowCycles() {
+  if (!ui.workflowCycles || app.workflowReplay) return;
+  const mode = app.state?.config?.mode === 'decision_council' ? 'decision_council' : 'planning';
+  if (ui.workflowDescription) {
+    ui.workflowDescription.textContent = mode === 'decision_council'
+      ? 'Framer, 5개 독립 관점, 익명 평가, Chair의 현재 진행을 Cycle별로 표시합니다.'
+      : 'Orchestrator와 두 Agent의 현재 진행을 Cycle별로 표시합니다.';
+  }
+  const grouped = new Map();
+  for (const event of app.workflowEvents) {
+    const cycle = Math.max(0, Number(event.cycle) || 0);
+    if (!cycle) continue;
+    if (!grouped.has(cycle)) grouped.set(cycle, []);
+    grouped.get(cycle).push(event);
+  }
+  if (app.cycle > 0 && !grouped.has(app.cycle)) grouped.set(app.cycle, []);
+  ui.workflowCycles.replaceChildren();
+  if (!grouped.size) {
+    const empty = document.createElement('div');
+    empty.className = 'workflow-empty';
+    empty.innerHTML = '<strong>첫 Cycle을 기다리고 있습니다.</strong><span>지시를 보내면 실행 단계가 이곳에 생성됩니다.</span>';
+    ui.workflowCycles.append(empty);
+    renderWorkflowMetrics();
+    return;
+  }
+  const cycles = [...grouped.keys()].sort((a, b) => a - b);
+  const currentCycle = Math.max(app.cycle, ...cycles);
+  cycles.forEach((cycleNumber) => {
+    const events = grouped.get(cycleNumber);
+    const last = events[events.length - 1] || {};
+    const phase = cycleNumber === currentCycle
+      ? normalizePhase(app.phase)
+      : normalizePhase(last.phase || 'completed');
+    const detail = document.createElement('details');
+    detail.className = 'workflow-cycle';
+    detail.dataset.cycle = String(cycleNumber);
+    detail.open = cycleNumber === currentCycle;
+    const summary = document.createElement('summary');
+    summary.innerHTML = `<span>Cycle ${cycleNumber}</span><strong>${escapeHtml(PHASE_LABELS[phase] || phase)}</strong><small>${events.length} events</small>`;
+    const body = document.createElement('div');
+    body.className = `workflow-cycle-body mode-${mode}`;
+    if (mode === 'decision_council') renderDecisionCycleBody(body, events, phase);
+    else renderPlanningCycleBody(body, events, phase);
+    const report = [...events].reverse().find((event) => workflowArtifactType(event) === 'council_reports')?.artifact;
+    if (report?.html?.url || report?.transcript?.url) {
+      const actions = document.createElement('nav');
+      actions.className = 'workflow-report-actions';
+      actions.setAttribute('aria-label', `Cycle ${cycleNumber} 보고서`);
+      [['HTML 보고서', report.html], ['Markdown 기록', report.transcript]].forEach(([label, item]) => {
+        if (!item?.url) return;
+        const link = document.createElement('a');
+        link.href = item.url;
+        link.target = '_blank';
+        link.rel = 'noopener';
+        link.textContent = label;
+        actions.append(link);
+      });
+      body.append(actions);
+    }
+    detail.append(summary, body);
+    ui.workflowCycles.append(detail);
+  });
+  renderWorkflowMetrics();
+}
+
+function recordWorkflowEvent(event) {
+  if (!event || typeof event !== 'object') return;
+  app.workflowEvents.push(event);
+  app.workflowEvents = app.workflowEvents.slice(-1000);
+  renderWorkflowCycles();
+}
+
+function workflowNodeState(element, state) {
+  if (!element) return;
+  element.classList.toggle('is-active', state === 'active');
+  element.classList.toggle('is-complete', state === 'complete');
+  element.classList.toggle('is-error', state === 'error');
+  element.dataset.workflowState = state;
+}
+
+function workflowStatus(role, message) {
+  const element = {
+    orchestrator: ui.workflowOrchestratorStatus,
+    claude: ui.workflowClaudeStatus,
+    codex: ui.workflowCodexStatus,
+    return: ui.workflowReturnStatus,
+  }[role];
+  const clean = textFrom(message).replace(/\s+/g, ' ').trim();
+  if (element && clean) {
+    element.textContent = clean.length > 220 ? `${clean.slice(0, 217)}…` : clean;
+    element.title = clean;
+  }
+}
+
+function workflowElement(target) {
+  return {
+    workflowOrchestratorTop: ui.workflowOrchestratorTop,
+    workflowAgentGroup: ui.workflowAgentGroup,
+    workflowOrchestratorReturn: ui.workflowOrchestratorReturn,
+  }[target] || ui.workflowOrchestratorTop;
+}
+
+function followWorkflowTarget(target = app.workflowTarget, immediate = false) {
+  app.workflowTarget = target || app.workflowTarget;
+  if (!app.workflowFollowEnabled || app.workflowReplay || !ui.workflowViewport) return;
+  const element = ui.workflowCycles?.querySelector('[data-current-workflow-target="true"]')
+    || ui.workflowCycles?.querySelector('.workflow-cycle[open] .workflow-cycle-node:last-of-type');
+  if (!element) return;
+  window.clearTimeout(app.workflowFollowTimer);
+  app.workflowFollowTimer = window.setTimeout(() => {
+    const top = Math.max(0, element.offsetTop - ((ui.workflowViewport.clientHeight - element.offsetHeight) / 2));
+    app.workflowProgrammaticScroll = true;
+    ui.workflowViewport.scrollTo({ top, behavior: immediate ? 'auto' : 'smooth' });
+    window.setTimeout(() => { app.workflowProgrammaticScroll = false; }, immediate ? 50 : 550);
+  }, immediate ? 0 : 70);
+}
+
+function workflowPhaseMessage(phase, target) {
+  const label = PHASE_LABELS[phase] || phase;
+  if (target === 'workflowAgentGroup') return `${label} 작업을 병렬로 수행하고 있습니다.`;
+  if (target === 'workflowOrchestratorReturn') {
+    if (TERMINAL_PHASES.has(phase)) return '최종 결과가 승인되었습니다.';
+    if (FEEDBACK_PHASES.has(phase)) return '통합 결과가 준비되어 사용자 확인을 기다립니다.';
+    return `${label} 작업을 수행하고 있습니다.`;
+  }
+  if (['ready', 'idle', 'configuring'].includes(phase)) return '사용자 지시를 기다리고 있습니다.';
+  return `${label} 작업을 수행하고 있습니다.`;
+}
+
+function syncWorkflowPhase(value, immediate = false) {
+  const phase = normalizePhase(value);
+  if (!app.workflowReplay) {
+    renderWorkflowCycles();
+    followWorkflowTarget(phase, immediate);
+  }
+  return;
+  /* Legacy fixed-node workflow is retained in the DOM only for old session compatibility. */
+  const topBusy = WORKFLOW_TOP_PHASES.has(phase) && BUSY_PHASES.has(phase);
+  const agentBusy = WORKFLOW_AGENT_PHASES.has(phase);
+  const returnPhase = WORKFLOW_RETURN_PHASES.has(phase);
+  const terminal = TERMINAL_PHASES.has(phase);
+  const failed = FAILED_PHASES.has(phase);
+
+  ui.workflowIngress?.classList.toggle('is-flowing', topBusy);
+  ui.workflowDispatchLink?.classList.toggle('is-flowing', agentBusy);
+  ui.workflowReturnLink?.classList.toggle('is-flowing', returnPhase && !terminal);
+
+  if (['ready', 'idle', 'configuring', 'cancelled'].includes(phase)) {
+    workflowNodeState(ui.workflowOrchestratorTop, 'idle');
+    workflowNodeState(ui.workflowClaude, 'idle');
+    workflowNodeState(ui.workflowCodex, 'idle');
+    workflowNodeState(ui.workflowOrchestratorReturn, 'idle');
+    app.workflowTarget = 'workflowOrchestratorTop';
+  } else if (WORKFLOW_TOP_PHASES.has(phase)) {
+    workflowNodeState(ui.workflowOrchestratorTop, topBusy ? 'active' : 'idle');
+    workflowNodeState(ui.workflowClaude, 'idle');
+    workflowNodeState(ui.workflowCodex, 'idle');
+    workflowNodeState(ui.workflowOrchestratorReturn, 'idle');
+    workflowStatus('orchestrator', workflowPhaseMessage(phase, 'workflowOrchestratorTop'));
+    app.workflowTarget = 'workflowOrchestratorTop';
+  } else if (agentBusy) {
+    workflowNodeState(ui.workflowOrchestratorTop, 'complete');
+    workflowNodeState(ui.workflowClaude, 'active');
+    workflowNodeState(ui.workflowCodex, 'active');
+    workflowNodeState(ui.workflowOrchestratorReturn, 'idle');
+    const message = workflowPhaseMessage(phase, 'workflowAgentGroup');
+    workflowStatus('claude', message);
+    workflowStatus('codex', message);
+    app.workflowTarget = 'workflowAgentGroup';
+  } else if (returnPhase) {
+    workflowNodeState(ui.workflowOrchestratorTop, 'complete');
+    workflowNodeState(ui.workflowClaude, 'complete');
+    workflowNodeState(ui.workflowCodex, 'complete');
+    workflowNodeState(ui.workflowOrchestratorReturn, terminal ? 'complete' : 'active');
+    workflowStatus('return', workflowPhaseMessage(phase, 'workflowOrchestratorReturn'));
+    app.workflowTarget = 'workflowOrchestratorReturn';
+  }
+
+  if (failed) workflowNodeState(workflowElement(app.workflowTarget), 'error');
+  followWorkflowTarget(app.workflowTarget, immediate);
+}
+
 function setPhase(value) {
   app.phase = normalizePhase(value);
   ui.phasePill.dataset.phase = app.phase;
@@ -471,6 +1349,7 @@ function setPhase(value) {
   const busy = BUSY_PHASES.has(app.phase);
   ui.workspace.removeAttribute('aria-busy');
   ui.ticker.closest('.activity-panel')?.setAttribute('aria-busy', busy ? 'true' : 'false');
+  syncWorkflowPhase(app.phase);
   updateControls();
 }
 
@@ -545,6 +1424,7 @@ function renderQuestions(required, optional) {
 }
 
 function updateControls() {
+  const decisionCouncil = app.state?.config?.mode === 'decision_council';
   const busy = BUSY_PHASES.has(app.phase);
   const archived = app.archived;
   const securityBlocked = app.securityBlocked;
@@ -552,15 +1432,43 @@ function updateControls() {
   const failed = FAILED_PHASES.has(app.phase);
   const terminal = TERMINAL_PHASES.has(app.phase);
   const approvalPhase = ['waiting_approval', 'awaiting_approval', 'awaiting_user'].includes(app.phase);
-  const canApprove = approvalPhase && app.requiredQuestions.length === 0 && !busy && !archived && !securityBlocked;
+  const stalePlan = Boolean(app.state?.harnessPlanStale);
+  const canApprove = approvalPhase && app.requiredQuestions.length === 0
+    && !stalePlan && !busy && !archived && !securityBlocked;
   const canWrite = !busy && !failed && !terminal && !archived && !securityBlocked;
 
   ui.sendBtn.disabled = !canWrite;
   ui.input.disabled = !canWrite;
   ui.applySession.disabled = busy || securityBlocked;
   ui.newSessionBtn.disabled = busy || securityBlocked;
-  [ui.orcBrain, ui.orcModel, ui.orcEffort, ui.clModel, ui.clEffort, ui.cxModel, ui.cxEffort]
+  [
+    ui.councilMode, ui.councilPreset, ui.councilMaxParallel,
+    ui.orcBrain, ui.orcModel, ui.orcEffort,
+    ui.orcFallbackBrain, ui.orcFallbackModel, ui.orcFallbackEffort,
+    ui.clModel, ui.clEffort, ui.clFallbackModel, ui.clFallbackEffort,
+    ui.cxModel, ui.cxEffort, ui.cxFallbackModel, ui.cxFallbackEffort,
+    ...Object.values(app.councilRoleControls).flatMap((role) => [
+      role.primary.brain, role.primary.model, role.primary.effort,
+      ...role.fallbacks.flatMap((fallback) => [
+        fallback.brain, fallback.model, fallback.effort,
+      ]),
+    ]),
+  ]
     .forEach((element) => { element.disabled = busy || securityBlocked || element.options.length === 0; });
+  if (!ui.orcFallbackBrain.value) {
+    ui.orcFallbackModel.disabled = true;
+    ui.orcFallbackEffort.disabled = true;
+  }
+  Object.values(app.councilRoleControls).forEach((role) => {
+    role.addFallback.disabled = busy || securityBlocked || role.fallbacks.length >= 5;
+    role.fallbacks.forEach((fallback) => {
+      fallback.remove.disabled = busy || securityBlocked;
+      if (!fallback.brain.value) {
+        fallback.model.disabled = true;
+        fallback.effort.disabled = true;
+      }
+    });
+  });
   Object.values(HARNESS_UI).forEach((target) => { target.input.disabled = busy || archived || securityBlocked; });
   ui.saveHarnessButtons.forEach((button) => {
     button.disabled = busy || archived || securityBlocked || !app.harnessDirty.has(button.dataset.role);
@@ -573,7 +1481,9 @@ function updateControls() {
   ui.approveBtn.disabled = !canApprove;
   ui.approveBtn.title = app.requiredQuestions.length
     ? `필수 질문 ${app.requiredQuestions.length}개에 먼저 답변해야 합니다.`
-    : '';
+    : stalePlan
+      ? 'Harness가 변경되어 현재 기획안을 다시 실행해야 합니다.'
+      : '';
 
   app.feedbackMode = feedbackPhase || app.feedbackMode;
   if (!feedbackPhase && !approvalPhase) app.feedbackMode = false;
@@ -601,21 +1511,27 @@ function updateControls() {
     ui.inputLabel.textContent = '입력 잠김';
     setSendButtonLabel('입력 불가', '×');
   } else if (terminal) {
-    ui.actionTitle.textContent = 'MVP 기획 루프 완료';
+    ui.actionTitle.textContent = decisionCouncil ? 'Council 판단 승인 완료' : 'MVP 기획 루프 완료';
     ui.actionDescription.textContent = '새로운 작업은 새 세션으로 시작하세요.';
     ui.inputLabel.textContent = '승인 완료';
     setSendButtonLabel('완료', '✓');
   } else if (feedbackPhase || app.feedbackMode) {
-    ui.actionTitle.textContent = app.requiredQuestions.length ? '필수 질문 답변' : '기획안 피드백';
+    ui.actionTitle.textContent = app.requiredQuestions.length
+      ? '필수 질문 답변'
+      : (decisionCouncil ? 'Council 판단 피드백' : '기획안 피드백');
     ui.actionDescription.textContent = app.requiredQuestions.length
       ? '위 필수 질문에 답하면 Orchestrator가 두 워커에게 다시 배분합니다.'
       : '수정 요청 또는 선택 질문의 답변을 입력하세요.';
     ui.inputLabel.textContent = '피드백 또는 질문 답변';
-    ui.input.placeholder = '기획안에서 바꿀 점과 유지할 점, 질문 답변을 구체적으로 입력하세요.';
+    ui.input.placeholder = decisionCouncil
+      ? '최종 판단에서 다시 검토할 전제·선택지·제약을 구체적으로 입력하세요.'
+      : '기획안에서 바꿀 점과 유지할 점, 질문 답변을 구체적으로 입력하세요.';
     setSendButtonLabel('피드백 보내기', '↑');
   } else {
     ui.actionTitle.textContent = '새 지시';
-    ui.actionDescription.textContent = '두 워커가 함께 검토할 과업을 입력하세요.';
+    ui.actionDescription.textContent = decisionCouncil
+      ? '서로 다른 다섯 관점이 검증할 중요한 결정을 입력하세요.'
+      : '두 워커가 함께 검토할 과업을 입력하세요.';
     ui.inputLabel.textContent = '사용자 지시';
     ui.input.placeholder = '예: 신제품 시장진입 전략 보고서의 목차와 검증 계획을 만들어줘.';
     setSendButtonLabel('지시 보내기', '↑');
@@ -730,8 +1646,75 @@ function renderAgentMessage(event, role, content, dedupeKey = null) {
   body.innerHTML = markdown(content);
   card.append(meta, body);
   container.append(card);
+  while (container.children.length > 6) container.firstElementChild?.remove();
   updateCount(role);
   if (nearBottom) container.scrollTop = container.scrollHeight;
+}
+
+function renderWorkflowReturnMessage(event, content) {
+  const clean = textFrom(content).trim();
+  if (!clean || !ui.orchestratorReturnMessages) return;
+  const key = `workflow-return:${messageFingerprint(event, 'orchestrator-return', clean)}`;
+  if (app.renderedWorkflowReturns.has(key)) return;
+  app.renderedWorkflowReturns.add(key);
+  removeEmpty(ui.orchestratorReturnMessages);
+
+  const card = document.createElement('article');
+  card.className = 'message-card workflow-return-message';
+  const meta = document.createElement('div');
+  meta.className = 'message-meta';
+  appendMeta(meta, event, 'Orchestrator 종합');
+  const body = document.createElement('div');
+  body.className = 'message-body';
+  body.innerHTML = markdown(clean);
+  card.append(meta, body);
+  ui.orchestratorReturnMessages.append(card);
+  while (ui.orchestratorReturnMessages.children.length > 6) {
+    ui.orchestratorReturnMessages.firstElementChild?.remove();
+  }
+  ui.orchestratorReturnMessages.scrollTop = ui.orchestratorReturnMessages.scrollHeight;
+}
+
+function updateWorkflowFromEvent(event, role, kind, artifact) {
+  recordWorkflowEvent(event);
+  return;
+  /* Legacy fixed-node renderer is intentionally bypassed by the Cycle renderer. */
+  const phase = normalizePhase(event.phase || event.stage || app.phase);
+  const content = publicContent(event);
+  const artifactText = artifact === undefined ? '' : summaryNarrative(artifact);
+  const statusText = content || artifactText;
+  const artifactEvent = ARTIFACT_KINDS.has(kind) && artifact !== undefined;
+
+  if (role === 'user') {
+    workflowStatus('orchestrator', '사용자 지시를 수신해 과업을 정리하고 있습니다.');
+    ui.workflowIngress?.classList.add('is-flowing');
+    followWorkflowTarget('workflowOrchestratorTop');
+    return;
+  }
+
+  if (role === 'claude' || role === 'codex') {
+    if (statusText) workflowStatus(role, statusText);
+    if (artifactEvent) workflowNodeState(role === 'claude' ? ui.workflowClaude : ui.workflowCodex, 'complete');
+    else if (STATUS_KINDS.has(kind) && WORKFLOW_AGENT_PHASES.has(phase)) {
+      workflowNodeState(role === 'claude' ? ui.workflowClaude : ui.workflowCodex, 'active');
+    }
+    followWorkflowTarget('workflowAgentGroup');
+    return;
+  }
+
+  if (role === 'orchestrator') {
+    const returning = WORKFLOW_RETURN_PHASES.has(phase);
+    if (returning) {
+      if (statusText) workflowStatus('return', statusText);
+      if ((artifactEvent || MESSAGE_KINDS.has(kind)) && statusText) {
+        renderWorkflowReturnMessage(event, artifactText || content);
+      }
+      followWorkflowTarget('workflowOrchestratorReturn');
+    } else {
+      if (statusText) workflowStatus('orchestrator', statusText);
+      followWorkflowTarget('workflowOrchestratorTop');
+    }
+  }
 }
 
 function artifactNarrative(artifact) {
@@ -748,9 +1731,17 @@ function artifactNarrative(artifact) {
     return [`교차 비평 판정: ${artifact.verdict || '검토 완료'}`, ...strengths, ...issues].join('\n');
   }
   return [
+    artifact.headline,
     artifact.executiveSummary,
     artifact.summary,
     artifact.objective,
+    artifact.decision,
+    artifact.assessment,
+    artifact.recommendation,
+    artifact.strongestWhy,
+    artifact.biggestBlindSpot,
+    artifact.allMissed,
+    artifact.firstAction,
     artifact.planMarkdown,
   ].map(textFrom).filter((value, index, values) => value.trim() && values.indexOf(value) === index).join('\n\n');
 }
@@ -759,7 +1750,11 @@ function summaryNarrative(artifact) {
   if (typeof artifact === 'string') return artifact;
   if (!artifact || typeof artifact !== 'object') return '';
   const lines = [];
-  [artifact.executiveSummary, artifact.summary, artifact.objective, artifact.verdict]
+  [
+    artifact.headline, artifact.executiveSummary, artifact.summary, artifact.objective,
+    artifact.decision, artifact.assessment, artifact.recommendation, artifact.verdict,
+    artifact.strongestWhy, artifact.biggestBlindSpot, artifact.allMissed, artifact.firstAction,
+  ]
     .map(textFrom).filter(Boolean).forEach((value) => lines.push(value));
   for (const key of ['changeSummary', 'decisions', 'nextActions', 'strengths']) {
     const items = Array.isArray(artifact[key]) ? artifact[key].slice(0, 3) : [];
@@ -1373,6 +2368,15 @@ function structuredNode(value) {
     }
     return list;
   }
+  if (typeof value === 'string' && value.startsWith('/api/council/artifacts/')) {
+    const link = document.createElement('a');
+    link.className = 'structured-value';
+    link.href = value;
+    link.target = '_blank';
+    link.rel = 'noopener';
+    link.textContent = value.endsWith('.html') ? 'Council HTML 보고서 열기' : 'Council 트랜스크립트 열기';
+    return link;
+  }
   const paragraph = document.createElement('p');
   paragraph.className = 'structured-value';
   paragraph.textContent = String(value);
@@ -1401,6 +2405,13 @@ function renderArtifact(event, kind, rawArtifact) {
 
   const card = document.createElement('details');
   card.className = 'artifact-card';
+  const artifactType = String(event.artifactType || event.artifact_type
+    || artifact?.artifactType || artifact?.type || kind || '').toLowerCase();
+  card.dataset.artifactType = artifactType;
+  card.dataset.cycle = String(Number(event.cycle) || 0);
+  card.dataset.finalArtifact = String([
+    'plan', 'synthesis', 'council_verdict', 'council_reports', 'council_clarification',
+  ].some((type) => artifactType.includes(type)));
   card.open = ['checkpoint', 'plan', 'synthesis_artifact'].includes(kind)
     || artifact?.artifactType === 'synthesis';
   const header = document.createElement('summary');
@@ -1437,13 +2448,34 @@ function renderArtifact(event, kind, rawArtifact) {
   ui.artifactList.append(card);
   ui.artifactSection.classList.remove('hidden');
   updateCount('artifact');
+  applyArtifactFilter();
+}
+
+function applyArtifactFilter() {
+  const filter = ui.artifactFilter?.value || 'final';
+  [...ui.artifactList.children].forEach((card) => {
+    const visible = filter === 'all'
+      || (filter === 'current' && Number(card.dataset.cycle) === Number(app.cycle))
+      || (filter === 'final' && card.dataset.finalArtifact === 'true');
+    card.classList.toggle('hidden', !visible);
+  });
 }
 
 function addActivity(event, text) {
   const content = textFrom(text).trim();
   if (!content) return;
   setTicker(content, false);
+  const key = event.fallback || event.circuit
+    ? `exception:${event.id || hash(content)}`
+    : `${event.cycle || 0}:${event.phase || ''}:${event.logicalRole || event.role || ''}:${event.artifactType || ''}`;
+  const existing = [...ui.activityLog.children].find((item) => item.dataset.activityKey === key);
+  if (existing) {
+    existing.textContent = content;
+    existing.title = content;
+    return;
+  }
   const item = document.createElement('li');
+  item.dataset.activityKey = key;
   item.textContent = content;
   item.title = content;
   ui.activityLog.append(item);
@@ -1487,6 +2519,7 @@ function handleEvent(event, messageEvent = null) {
     setPhase(event.phase || 'failed');
     setTicker(`오류: ${message}`, true);
     showError(message);
+    recordWorkflowEvent(event);
     return;
   }
 
@@ -1499,6 +2532,7 @@ function handleEvent(event, messageEvent = null) {
   if (kind === 'approval.required' || kind === 'approval_required') setPhase(event.phase || 'waiting_approval');
 
   const artifact = artifactFromEvent(event, kind);
+  updateWorkflowFromEvent(event, role, kind, artifact);
   if (ARTIFACT_KINDS.has(kind) && artifact !== undefined) {
     renderArtifact(event, kind, artifact);
     const narrative = artifactNarrative(artifact);
@@ -1539,10 +2573,12 @@ function handleEvent(event, messageEvent = null) {
 function resetRendered() {
   app.seenEvents.clear();
   app.renderedMessages.clear();
+  app.renderedWorkflowReturns.clear();
   app.renderedArtifacts.clear();
   app.summaryKeys.clear();
   app.summaries = { orchestrator: [], claude: [], codex: [] };
   app.counts = { user: 0, orchestrator: 0, claude: 0, codex: 0, artifact: 0 };
+  app.workflowEvents = [];
   ui.userCount.textContent = '0';
   ui.orchestratorCount.textContent = '0';
   ui.claudeCount.textContent = '0';
@@ -1552,6 +2588,9 @@ function resetRendered() {
   ui.orchestratorMessages.innerHTML = '<p class="empty-state">과업 배분, Harness 변경, 통합 결과가 표시됩니다.</p>';
   ui.claudeMessages.innerHTML = '<p class="empty-state">Claude의 공개 초안과 비평이 여기에 표시됩니다.</p>';
   ui.codexMessages.innerHTML = '<p class="empty-state">ChatGPT의 공개 초안과 비평이 여기에 표시됩니다.</p>';
+  ui.orchestratorReturnMessages.innerHTML = '<p class="empty-state">Agent 결과가 돌아오면 통합 판단이 이곳에 생성됩니다.</p>';
+  ui.workflowCycles?.replaceChildren();
+  setWorkflowFollow(true);
   ui.artifactList.replaceChildren();
   ui.artifactSection.classList.add('hidden');
   ui.activityLog.replaceChildren();
@@ -1568,8 +2607,10 @@ function renderState(state, reset = true) {
   app.activeSessionId = nextSessionId;
   app.archived = Boolean(state.archivedAt || state.sessionMetadata?.archivedAt);
   if (reset) resetRendered();
+  app.workflowReplay = true;
   setPhase(state.phase || state.status || 'ready');
   updateMeta(state);
+  applyArtifactFilter();
   const questions = extractQuestions(state);
   renderQuestions(questions.required, questions.optional);
   renderHarnesses(state, true);
@@ -1597,7 +2638,10 @@ function renderState(state, reset = true) {
   }
 
   // 과거 이벤트 재생이 현재 상태를 이전 단계로 되돌리지 않도록 서버 상태를 마지막에 재적용한다.
+  app.workflowReplay = false;
+  renderWorkflowCycles();
   setPhase(state.phase || state.status || 'ready');
+  followWorkflowTarget(app.workflowTarget, true);
   updateMeta(state);
   renderQuestions(questions.required, questions.optional);
   renderHarnesses(state, true);
@@ -1607,7 +2651,11 @@ function renderState(state, reset = true) {
   if (error) setTicker(`오류: ${error}`, true);
   else if (BUSY_PHASES.has(app.phase)) setTicker(`${PHASE_LABELS[app.phase] || app.phase} 단계가 진행 중입니다.`);
   else if (FEEDBACK_PHASES.has(app.phase)) setTicker('Orchestrator 결과를 확인하고 승인하거나 피드백을 보내세요.');
-  else if (TERMINAL_PHASES.has(app.phase)) setTicker('기획안이 승인되어 MVP 기획 루프가 완료되었습니다.');
+  else if (TERMINAL_PHASES.has(app.phase)) {
+    setTicker(state.config?.mode === 'decision_council'
+      ? 'Council 최종 판단이 승인되었습니다.'
+      : '기획안이 승인되어 MVP 기획 루프가 완료되었습니다.');
+  }
   else setTicker('새 지시를 입력할 준비가 되었습니다.');
   scheduleHarnessHistoryLoad();
 }
@@ -2130,6 +3178,8 @@ async function sendInput() {
   const content = ui.input.value.trim();
   if (!content || ui.sendBtn.disabled) return;
   const feedback = FEEDBACK_PHASES.has(app.phase) || app.feedbackMode;
+  setWorkflowFollow(true);
+  followWorkflowTarget('workflowOrchestratorTop');
   await performAction(ui.sendBtn, async () => {
     await post(feedback ? '/api/feedback' : '/api/instruct', feedback
       ? { feedback: content, planVersion: app.planVersion }
@@ -2148,6 +3198,30 @@ ui.toggleSetup.addEventListener('click', () => {
 });
 
 ui.orcBrain.addEventListener('change', () => refreshOrchestratorOptions());
+ui.orcFallbackBrain.addEventListener('change', () => {
+  const provider = providerOptions(ui.orcFallbackBrain.value || 'codex');
+  fillSelect(ui.orcFallbackModel, provider.models, '', provider.defaultModel);
+  fillSelect(ui.orcFallbackEffort, provider.efforts, '', provider.defaultEffort);
+  ui.orcFallbackModel.disabled = !ui.orcFallbackBrain.value;
+  ui.orcFallbackEffort.disabled = !ui.orcFallbackBrain.value;
+});
+ui.councilMode.addEventListener('change', renderCouncilMode);
+ui.councilPreset?.addEventListener('change', () => applyCouncilPreset(ui.councilPreset.value));
+ui.artifactFilter?.addEventListener('change', applyArtifactFilter);
+ui.workflowFollow?.addEventListener('click', () => {
+  setWorkflowFollow(true);
+  followWorkflowTarget(app.workflowTarget, true);
+});
+ui.workflowViewport?.addEventListener('wheel', () => setWorkflowFollow(false), { passive: true });
+ui.workflowViewport?.addEventListener('touchstart', () => setWorkflowFollow(false), { passive: true });
+ui.workflowViewport?.addEventListener('pointerdown', (event) => {
+  if (event.offsetX >= ui.workflowViewport.clientWidth - 22) setWorkflowFollow(false);
+});
+ui.workflowViewport?.addEventListener('keydown', (event) => {
+  if (['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '].includes(event.key)) {
+    setWorkflowFollow(false);
+  }
+});
 
 ui.applySession.addEventListener('click', () => {
   if (app.harnessDirty.size && !window.confirm('저장하지 않은 Harness 수정이 있습니다. 변경을 버리고 새 세션을 시작할까요?')) return;
@@ -2266,7 +3340,9 @@ ui.approveBtn.addEventListener('click', () => {
   performAction(ui.approveBtn, async () => {
     const payload = await post('/api/approve', { planVersion: app.planVersion });
     setPhase(payload.phase || 'approved');
-    setTicker('기획안이 승인되었습니다.');
+    setTicker(app.state?.config?.mode === 'decision_council'
+      ? 'Council 최종 판단이 승인되었습니다.'
+      : '기획안이 승인되었습니다.');
   }).catch(() => {});
 });
 

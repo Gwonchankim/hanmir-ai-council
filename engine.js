@@ -4,14 +4,29 @@ const crypto = require('crypto');
 const config = require('./config');
 const defaultStore = require('./state');
 const prompts = require('./agents/prompts');
+const councilPrompts = require('./agents/council-prompts');
 const { callBrain: defaultBrainCaller } = require('./agents/brain');
 const { schemaFor, parseStructured, validateArtifact } = require('./schemas');
 const { roleToMarkdown } = require('./harnesses');
+const { writeCouncilReport } = require('./lib/council-report');
+const {
+  anonymizeResponse,
+  identityLeaks,
+  validateAnonymousBundle,
+} = require('./lib/council-anonymity');
+const {
+  activeCircuit,
+  classifyFallbackError,
+  isFallbackEligible,
+  publicRoute,
+  routeChain,
+  routeKey,
+} = require('./lib/model-router');
 
 const ROLE_META = Object.freeze({
-  orchestrator: { provider: null, eventRole: 'orchestrator', label: 'Orchestrator' },
-  claudeWorker: { provider: 'claude', eventRole: 'claude', label: 'Claude 워커' },
-  codexWorker: { provider: 'codex', eventRole: 'codex', label: 'ChatGPT 워커' },
+  orchestrator: { eventRole: 'orchestrator', label: 'Orchestrator' },
+  claudeWorker: { eventRole: 'claude', label: 'Claude 워커' },
+  codexWorker: { eventRole: 'codex', label: 'ChatGPT 워커' },
 });
 
 function abortError(message = '실행이 취소되었습니다.') {
@@ -38,20 +53,38 @@ function assertPromptWithinLimit(prompt) {
 }
 
 function providerConfig(state, roleKey) {
-  if (roleKey === 'orchestrator') {
-    return {
-      brain: state.config.orchestrator.brain,
-      model: state.config.orchestrator.model,
-      effort: state.config.orchestrator.effort,
-    };
-  }
-  if (roleKey === 'claudeWorker') {
-    return { brain: 'claude', ...state.config.claudeWorker };
-  }
-  if (roleKey === 'codexWorker') {
-    return { brain: 'codex', ...state.config.codexWorker };
+  if (ROLE_META[roleKey]) return state.config[roleKey];
+  if (roleKey === 'councilChair' || roleKey === 'councilFramer') return state.config.council.chair;
+  const advisorMatch = roleKey.match(/^council(?:Advisor|Reviewer):(.+)$/);
+  if (advisorMatch && state.config.council.advisors[advisorMatch[1]]) {
+    return state.config.council.advisors[advisorMatch[1]];
   }
   throw new Error(`알 수 없는 역할: ${roleKey}`);
+}
+
+function roleMeta(roleKey, selected = {}) {
+  if (ROLE_META[roleKey]) return ROLE_META[roleKey];
+  if (roleKey === 'councilChair' || roleKey === 'councilFramer') {
+    return { eventRole: 'orchestrator', label: roleKey === 'councilFramer' ? 'Council Framer' : 'Council Chair' };
+  }
+  const advisorMatch = roleKey.match(/^council(Advisor|Reviewer):(.+)$/);
+  if (advisorMatch) {
+    const label = advisorMatch[1] === 'Reviewer' ? '익명 동료평가자' : '독립 조언자';
+    return {
+      eventRole: selected.brain === 'claude' ? 'claude' : 'codex',
+      label: `${label} · ${advisorMatch[2]}`,
+    };
+  }
+  return { eventRole: 'orchestrator', label: roleKey };
+}
+
+function shuffled(values) {
+  const result = [...values];
+  for (let index = result.length - 1; index > 0; index -= 1) {
+    const target = crypto.randomInt(index + 1);
+    [result[index], result[target]] = [result[target], result[index]];
+  }
+  return result;
 }
 
 function convergenceReached(claudeCritique, codexCritique) {
@@ -81,6 +114,50 @@ function instructionMentionsMetric(instruction, value, units) {
 
 function semanticErrors(type, artifact, context = {}) {
   const errors = [];
+  if (['decisionFrame', 'advisorAnalysis', 'peerReview', 'councilVerdict'].includes(type)
+    && artifact.cycle !== context.cycle) {
+    errors.push({ path: '/cycle', message: `cycle must be ${context.cycle}.` });
+  }
+  if (type === 'decisionFrame') {
+    if (artifact.needsInput && !String(artifact.clarifyingQuestion || '').trim()) {
+      errors.push({ path: '/clarifyingQuestion', message: 'needsInput=true이면 확인 질문 하나가 필요합니다.' });
+    }
+    if (!artifact.needsInput && String(artifact.clarifyingQuestion || '').trim()) {
+      errors.push({ path: '/clarifyingQuestion', message: 'needsInput=false이면 clarifyingQuestion은 빈 문자열이어야 합니다.' });
+    }
+  }
+  if (type === 'advisorAnalysis' && artifact.advisor !== context.advisor) {
+    errors.push({ path: '/advisor', message: `advisor는 ${context.advisor}이어야 합니다.` });
+  }
+  if (type === 'advisorAnalysis') {
+    const leaks = identityLeaks(artifact);
+    if (leaks.length) {
+      errors.push({
+        path: '/assessment',
+        message: `익명 평가에 노출되는 본문에는 역할명·모델명·Provider명을 쓸 수 없습니다: ${leaks.join(', ')}`,
+      });
+    }
+  }
+  if (type === 'peerReview' && artifact.reviewer !== context.reviewer) {
+    errors.push({ path: '/reviewer', message: `reviewer는 ${context.reviewer}이어야 합니다.` });
+  }
+  if (type === 'councilVerdict') {
+    if (artifact.planVersion !== context.planVersion) {
+      errors.push({ path: '/planVersion', message: `planVersion은 ${context.planVersion}이어야 합니다.` });
+    }
+    const headings = [
+      'Where the Council Agrees',
+      'Where the Council Clashes',
+      'Blind Spots the Council Caught',
+      'The Recommendation',
+      'The One Thing to Do First',
+    ];
+    for (const heading of headings) {
+      if (!String(artifact.planMarkdown || '').includes(heading)) {
+        errors.push({ path: '/planMarkdown', message: `${heading} 섹션이 필요합니다.` });
+      }
+    }
+  }
   if (type === 'harnessSet' && artifact.cycle !== context.cycle) {
     errors.push({ path: '/cycle', message: `cycle must be ${context.cycle}.` });
   }
@@ -243,16 +320,14 @@ class PlanningEngine {
   async _invoke(roleKey, prompt, artifactType, context, runId, signal) {
     this._assertCurrent(runId, signal);
     const state = this.store.get();
-    const role = ROLE_META[roleKey];
     const selected = this._roleConfig(roleKey);
-    this.emit({
-      type: 'status', role: role.eventRole,
-      message: `${role.label} · ${selected.model} · effort ${selected.effort} 시작`,
-      artifactType, runId,
-    });
+    const routes = routeChain(selected);
+    if (!routes.length) throw new Error(`${roleKey}에 사용할 모델 경로가 없습니다.`);
 
     let latestText = '';
     let validation = null;
+    let preferredRouteIndex = 0;
+    let lastRole = roleMeta(roleKey, routes[0]);
     for (let attempt = 0; attempt <= config.loop.structuredRetries; attempt += 1) {
       const callPrompt = assertPromptWithinLimit(attempt === 0
         ? prompt
@@ -273,21 +348,101 @@ class PlanningEngine {
         promptHarnessDigest: callPrompt.includes(harnessMarkdown) ? harnessDigest : null,
         included: callPrompt.includes(harnessMarkdown),
       } : null;
-      const previousSession = state.sessions[roleKey];
-      const result = await this.brainCaller({
-        ...selected,
-        prompt: callPrompt,
-        session: state.sessions[roleKey],
-        schema: schemaFor(artifactType),
-        signal,
-        // 어댑터의 공개 가능한 진행 이벤트만 허용하며 본문/추론 청크는 중계하지 않는다.
-        onEvent: (kind, content) => {
-          if (kind === 'status' && content) {
-            this.emit({ type: 'status', role: role.eventRole, message: String(content).slice(0, 500), artifactType, runId });
-          }
-        },
-      });
+      let result = null;
+      let activeRoute = null;
+      let activeRouteIndex = preferredRouteIndex;
+      let previousSession = null;
+      let fallbackFrom = null;
+      for (let routeIndex = preferredRouteIndex; routeIndex < routes.length; routeIndex += 1) {
+        const candidate = routes[routeIndex];
+        const role = roleMeta(roleKey, candidate);
+        const circuit = activeCircuit(state.routeHealth, candidate);
+        const hasCircuitFallback = routeIndex + 1 < routes.length;
+        if (circuit && hasCircuitFallback) {
+          const next = routes[routeIndex + 1];
+          fallbackFrom = candidate;
+          this.emit({
+            type: 'status',
+            role: role.eventRole,
+            logicalRole: roleKey,
+            message: `${role.label}의 ${candidate.brain}/${candidate.model} 회로가 열려 있어 ${next.brain}/${next.model}로 바로 전환합니다.`,
+            artifactType,
+            circuit: { ...circuit, skipped: publicRoute(candidate) },
+            fallback: {
+              from: publicRoute(candidate),
+              to: publicRoute(next),
+              reason: 'circuit_open',
+            },
+            runId,
+          });
+          continue;
+        }
+        const sessionKey = routeKey(candidate);
+        state.routeSessions ||= {};
+        state.routeSessions[roleKey] ||= {};
+        previousSession = state.routeSessions[roleKey][sessionKey]
+          || (routeIndex === 0 ? state.sessions[roleKey] : null);
+        this.emit({
+          type: 'status',
+          role: role.eventRole,
+          logicalRole: roleKey,
+          message: `${role.label} · ${candidate.brain}/${candidate.model} · effort ${candidate.effort} 시작`,
+          artifactType,
+          modelRoute: publicRoute(candidate),
+          routeIndex,
+          runId,
+        });
+        try {
+          result = await this.brainCaller({
+            ...candidate,
+            prompt: callPrompt,
+            session: previousSession,
+            schema: schemaFor(artifactType),
+            signal,
+            // 어댑터의 공개 가능한 진행 이벤트만 허용하며 본문/추론 청크는 중계하지 않는다.
+            onEvent: (kind, content) => {
+              if (kind === 'status' && content) {
+                this.emit({
+                  type: 'status',
+                  role: role.eventRole,
+                  logicalRole: roleKey,
+                  message: String(content).slice(0, 500),
+                  artifactType,
+                  runId,
+                });
+              }
+            },
+          });
+          activeRoute = candidate;
+          activeRouteIndex = routeIndex;
+          preferredRouteIndex = routeIndex;
+          break;
+        } catch (error) {
+          const hasNext = routeIndex + 1 < routes.length;
+          if (!hasNext || !isFallbackEligible(error)) throw error;
+          const classification = classifyFallbackError(error);
+          const openedCircuit = this.store.openRouteCircuit(candidate, classification);
+          fallbackFrom = candidate;
+          const next = routes[routeIndex + 1];
+          this.emit({
+            type: 'status',
+            role: role.eventRole,
+            logicalRole: roleKey,
+            message: `${role.label}의 ${candidate.brain}/${candidate.model} 사용량·가용성 오류로 ${next.brain}/${next.model} 대체 경로를 사용합니다.`,
+            artifactType,
+            fallback: {
+              from: publicRoute(candidate),
+              to: publicRoute(next),
+              reason: classification?.reason || 'provider_limit_or_availability',
+            },
+            circuit: openedCircuit,
+            runId,
+          });
+        }
+      }
       this._assertCurrent(runId, signal);
+      const role = roleMeta(roleKey, activeRoute || selected);
+      lastRole = role;
       if (!result?.session) throw new Error(`${role.label}가 세션 ID를 반환하지 않았습니다.`);
       this.store.recordSessionInvocation({
         role: roleKey,
@@ -297,7 +452,13 @@ class PlanningEngine {
         returnedSession: result.session,
         execution: result.execution,
         promptBinding,
+        ...publicRoute(activeRoute),
+        routeIndex: activeRouteIndex,
+        fallbackFrom,
+        usage: result.usage,
       });
+      this.store.closeRouteCircuit(activeRoute);
+      state.routeSessions[roleKey][routeKey(activeRoute)] = result.session;
       state.sessions[roleKey] = result.session;
       latestText = result.text;
 
@@ -310,8 +471,10 @@ class PlanningEngine {
           if (!context.deferArtifactEvent) {
             this.emit({
               type: 'artifact', role: role.eventRole,
+              logicalRole: roleKey,
               message: `${role.label}의 ${artifactType} 완료`,
-              artifactType, artifact, runId,
+              artifactType, artifact, modelRoute: publicRoute(activeRoute),
+              routeIndex: activeRouteIndex, usage: result.usage, runId,
             });
           }
           this.store.touch();
@@ -322,7 +485,7 @@ class PlanningEngine {
         validation = [{ path: '/', message: error.message }];
       }
     }
-    const error = new Error(`${role.label}의 ${artifactType} 구조 검증에 실패했습니다: ${validation.map((item) => `${item.path} ${item.message}`).join('; ')}`);
+    const error = new Error(`${lastRole.label}의 ${artifactType} 구조 검증에 실패했습니다: ${validation.map((item) => `${item.path} ${item.message}`).join('; ')}`);
     error.name = 'StructuredOutputError';
     throw error;
   }
@@ -342,6 +505,68 @@ class PlanningEngine {
     const rejected = settled.find((item) => item.status === 'rejected');
     if (rejected) throw firstRealError || rejected.reason;
     return settled.map((item) => item.value);
+  }
+
+  async _runPool(tasks, maxParallel, signal) {
+    const results = new Array(tasks.length);
+    const errors = new Array(tasks.length);
+    let cursor = 0;
+    const worker = async () => {
+      while (cursor < tasks.length) {
+        this._assertCurrent(this.store.get().runId, signal);
+        const index = cursor;
+        cursor += 1;
+        try {
+          results[index] = await tasks[index](signal);
+        } catch (error) {
+          errors[index] = error;
+        }
+      }
+    };
+    const count = Math.max(1, Math.min(Number(maxParallel) || 1, tasks.length));
+    await Promise.all(Array.from({ length: count }, () => worker()));
+    const failure = errors.find(Boolean);
+    if (failure) throw failure;
+    return results;
+  }
+
+  runInstruction(instruction, isFeedback = false) {
+    return this.store.get().config.mode === 'decision_council'
+      ? this.runDecisionCouncil(instruction, isFeedback)
+      : this.runPlanning(instruction, isFeedback);
+  }
+
+  runDecisionCouncil(instruction, isFeedback = false) {
+    const text = String(instruction || '').trim();
+    if (!text) throw new Error('의사결정 질문 또는 피드백 내용이 비어 있습니다.');
+    if (text.length > config.limits.instructionChars) throw new Error('입력 길이가 허용 한도를 초과했습니다.');
+    const state = this.store.get();
+    if (this.store.isRunning() || this.active) throw new Error('이미 실행 중입니다.');
+    if (isFeedback) {
+      if (!state.currentPlan || !['awaiting_input', 'awaiting_approval'].includes(state.phase)) {
+        throw new Error('피드백을 반영할 Council 결과가 없습니다.');
+      }
+    } else if (!['idle', 'approved', 'cancelled'].includes(state.phase)) {
+      throw new Error('새 Council을 시작할 수 없는 상태입니다. 피드백 또는 재시도를 사용하세요.');
+    }
+
+    const cycle = this.store.beginCycle(text, isFeedback);
+    cycle.stage = 'framing';
+    const runId = this.store.get().runId;
+    this.emit({
+      type: 'user',
+      role: 'user',
+      message: text,
+      intent: isFeedback ? 'feedback' : 'instruction',
+      runId,
+    });
+    const controller = new AbortController();
+    const promise = this._executeDecisionCouncil(cycle, runId, controller.signal)
+      .finally(() => {
+        if (this.active?.runId === runId) this.active = null;
+      });
+    this.active = { runId, controller, promise };
+    return { runId, cycle: cycle.number, promise };
   }
 
   runPlanning(instruction, isFeedback = false) {
@@ -383,7 +608,10 @@ class PlanningEngine {
     state.lastError = null;
     cycle.status = 'running';
     const controller = new AbortController();
-    const promise = this._execute(cycle, runId, controller.signal)
+    const execute = state.config.mode === 'decision_council'
+      ? this._executeDecisionCouncil.bind(this)
+      : this._execute.bind(this);
+    const promise = execute(cycle, runId, controller.signal)
       .finally(() => { if (this.active?.runId === runId) this.active = null; });
     this.active = { runId, controller, promise };
     this.store.snapshot();
@@ -492,6 +720,328 @@ class PlanningEngine {
       instruction: cycle.instruction,
       requiredFeedbackIds: feedbackIdsFromCycles(state.cycles, cycle.number),
     })) drop('synthesis');
+  }
+
+  _revalidateDecisionCouncilArtifacts(cycle) {
+    if (!cycle.artifacts || typeof cycle.artifacts !== 'object' || Array.isArray(cycle.artifacts)) {
+      cycle.artifacts = {};
+    }
+    const artifacts = cycle.artifacts;
+    const advisorKeys = config.COUNCIL_ADVISOR_KEYS;
+    const dropDownstream = () => {
+      delete artifacts.anonymizationMapping;
+      delete artifacts.anonymousResponses;
+      delete artifacts.peerReviews;
+      delete artifacts.councilVerdict;
+      delete artifacts.councilReports;
+    };
+    if (artifacts.decisionFrame && !this._checkpointValid(
+      'decisionFrame', artifacts.decisionFrame, { cycle: cycle.number },
+    )) {
+      delete artifacts.decisionFrame;
+      delete artifacts.advisorAnalyses;
+      dropDownstream();
+      return;
+    }
+    if (!artifacts.decisionFrame || artifacts.decisionFrame.needsInput) return;
+    artifacts.advisorAnalyses ||= {};
+    for (const advisor of advisorKeys) {
+      if (artifacts.advisorAnalyses[advisor] && !this._checkpointValid(
+        'advisorAnalysis',
+        artifacts.advisorAnalyses[advisor],
+        { cycle: cycle.number, advisor },
+      )) delete artifacts.advisorAnalyses[advisor];
+    }
+    if (advisorKeys.some((advisor) => !artifacts.advisorAnalyses[advisor])) {
+      dropDownstream();
+      return;
+    }
+    const mappingValues = Object.values(artifacts.anonymizationMapping || {});
+    if (mappingValues.length !== advisorKeys.length
+      || new Set(mappingValues).size !== advisorKeys.length
+      || advisorKeys.some((advisor) => !mappingValues.includes(advisor))) {
+      dropDownstream();
+      return;
+    }
+    if (validateAnonymousBundle({
+      mapping: artifacts.anonymizationMapping,
+      responses: artifacts.anonymousResponses,
+      advisorAnalyses: artifacts.advisorAnalyses,
+      advisorKeys,
+    }).length) {
+      dropDownstream();
+      return;
+    }
+    artifacts.peerReviews ||= {};
+    for (const reviewer of advisorKeys) {
+      if (artifacts.peerReviews[reviewer] && !this._checkpointValid(
+        'peerReview',
+        artifacts.peerReviews[reviewer],
+        { cycle: cycle.number, reviewer },
+      )) delete artifacts.peerReviews[reviewer];
+    }
+    if (advisorKeys.some((reviewer) => !artifacts.peerReviews[reviewer])) {
+      delete artifacts.councilVerdict;
+      delete artifacts.councilReports;
+      return;
+    }
+    if (artifacts.councilVerdict && !this._checkpointValid(
+      'councilVerdict',
+      artifacts.councilVerdict,
+      { cycle: cycle.number, planVersion: this.store.get().planVersion + 1 },
+    )) {
+      delete artifacts.councilVerdict;
+      delete artifacts.councilReports;
+    }
+  }
+
+  async _executeDecisionCouncil(cycle, runId, signal) {
+    const state = this.store.get();
+    const artifacts = cycle.artifacts ||= {};
+    const advisorKeys = config.COUNCIL_ADVISOR_KEYS;
+    const priorPlan = cycle.isFeedback ? state.currentPlan : null;
+    const checkpoint = (container, key, task) => async (childSignal) => {
+      const value = await task(childSignal);
+      this._assertCurrent(runId, childSignal);
+      container[key] = value;
+      this.store.touch();
+      this.store.snapshot();
+      return value;
+    };
+    try {
+      this._assertCurrent(runId, signal);
+      this._revalidateDecisionCouncilArtifacts(cycle);
+
+      if (!artifacts.decisionFrame) {
+        this._setStage(cycle, 'framing', 0, runId);
+        artifacts.decisionFrame = await this._invoke(
+          'councilFramer',
+          councilPrompts.frame({
+            instruction: cycle.instruction,
+            priorPlan,
+            cycle: cycle.number,
+          }),
+          'decisionFrame',
+          { cycle: cycle.number },
+          runId,
+          signal,
+        );
+        this.store.snapshot();
+      }
+
+      if (artifacts.decisionFrame.needsInput) {
+        const nextVersion = state.planVersion + 1;
+        state.currentPlan = {
+          schemaVersion: 1,
+          artifactType: 'council_clarification',
+          cycle: cycle.number,
+          planVersion: nextVersion,
+          title: 'Council 판단 전 확인이 필요합니다',
+          status: 'needs_input',
+          planMarkdown: `## Neutral Decision Frame\n${artifacts.decisionFrame.decision}\n\n## Clarifying Question\n${artifacts.decisionFrame.clarifyingQuestion}`,
+          requiredQuestions: [{
+            id: `C${cycle.number}-Q1`,
+            question: artifacts.decisionFrame.clarifyingQuestion,
+            impact: '다섯 조언자가 구체적이고 비교 가능한 판단을 내리는 데 필요한 정보입니다.',
+          }],
+          optionalQuestions: [],
+        };
+        state.planVersion = nextVersion;
+        state.phase = 'awaiting_input';
+        state.round = 0;
+        cycle.status = 'completed';
+        cycle.stage = state.phase;
+        cycle.completedAt = new Date().toISOString();
+        state.lastError = null;
+        state.currentEvaluation = {
+          kind: 'council_protocol_gate',
+          passed: true,
+          gates: { neutralFrame: true, singleClarifyingQuestion: true },
+          note: '확인 답변을 받은 뒤 독립 분석을 시작합니다.',
+        };
+        this.emit({
+          type: 'checkpoint',
+          role: 'orchestrator',
+          message: 'Council 분석 전 확인 질문이 하나 필요합니다.',
+          artifactType: 'council_clarification',
+          artifact: state.currentPlan,
+          runId,
+        });
+        state.runId = null;
+        this.store.snapshot();
+        return state.currentPlan;
+      }
+
+      artifacts.advisorAnalyses ||= {};
+      const missingAdvisors = advisorKeys.filter((advisor) => !artifacts.advisorAnalyses[advisor]);
+      if (missingAdvisors.length) {
+        this._setStage(cycle, 'independent_analysis', 0, runId);
+        const tasks = missingAdvisors.map((advisor) => checkpoint(
+          artifacts.advisorAnalyses,
+          advisor,
+          (childSignal) => this._invoke(
+            `councilAdvisor:${advisor}`,
+            councilPrompts.analyze({
+              frame: artifacts.decisionFrame,
+              advisor,
+              cycle: cycle.number,
+            }),
+            'advisorAnalysis',
+            { cycle: cycle.number, advisor },
+            runId,
+            childSignal,
+          ),
+        ));
+        await this._runPool(tasks, state.config.council.maxParallel, signal);
+      }
+
+      if (!artifacts.anonymizationMapping || !artifacts.anonymousResponses) {
+        const shuffledAdvisors = shuffled(advisorKeys);
+        const letters = ['A', 'B', 'C', 'D', 'E'];
+        artifacts.anonymizationMapping = Object.fromEntries(
+          letters.map((letter, index) => [letter, shuffledAdvisors[index]]),
+        );
+        artifacts.anonymousResponses = letters.map((letter) => anonymizeResponse(
+          letter,
+          artifacts.advisorAnalyses[artifacts.anonymizationMapping[letter]],
+        ));
+        this.store.snapshot();
+      }
+
+      artifacts.peerReviews ||= {};
+      const missingReviewers = advisorKeys.filter((reviewer) => !artifacts.peerReviews[reviewer]);
+      if (missingReviewers.length) {
+        this._setStage(cycle, 'anonymous_peer_review', 1, runId);
+        const tasks = missingReviewers.map((reviewer) => checkpoint(
+          artifacts.peerReviews,
+          reviewer,
+          (childSignal) => this._invoke(
+            `councilReviewer:${reviewer}`,
+            councilPrompts.peerReview({
+              frame: artifacts.decisionFrame,
+              reviewer,
+              anonymousResponses: artifacts.anonymousResponses,
+              cycle: cycle.number,
+            }),
+            'peerReview',
+            { cycle: cycle.number, reviewer },
+            runId,
+            childSignal,
+          ),
+        ));
+        await this._runPool(tasks, state.config.council.maxParallel, signal);
+      }
+
+      if (!artifacts.councilVerdict) {
+        this._setStage(cycle, 'chair_synthesis', 2, runId);
+        const nextVersion = state.planVersion + 1;
+        const deAnonymized = advisorKeys.map((advisor) => ({
+          advisor,
+          label: councilPrompts.ADVISORS[advisor].label,
+          response: artifacts.advisorAnalyses[advisor],
+        }));
+        artifacts.councilVerdict = await this._invoke(
+          'councilChair',
+          councilPrompts.chair({
+            frame: artifacts.decisionFrame,
+            advisorResponses: deAnonymized,
+            peerReviews: advisorKeys.map((reviewer) => artifacts.peerReviews[reviewer]),
+            anonymizationMapping: artifacts.anonymizationMapping,
+            planVersion: nextVersion,
+            cycle: cycle.number,
+          }),
+          'councilVerdict',
+          { cycle: cycle.number, planVersion: nextVersion },
+          runId,
+          signal,
+        );
+      }
+
+      if (!artifacts.councilReports) {
+        const generatedAt = new Date().toISOString();
+        const advisorResponses = advisorKeys.map((advisor) => ({
+          advisor,
+          label: councilPrompts.ADVISORS[advisor].label,
+          response: artifacts.advisorAnalyses[advisor],
+        }));
+        artifacts.councilReports = writeCouncilReport({
+          dataDir: this.store.dataDir,
+          sessionId: state.sessionKey,
+          originalQuestion: cycle.instruction,
+          frame: artifacts.decisionFrame,
+          advisorResponses,
+          anonymousResponses: artifacts.anonymousResponses,
+          anonymizationMapping: artifacts.anonymizationMapping,
+          peerReviews: advisorKeys.map((reviewer) => artifacts.peerReviews[reviewer]),
+          verdict: artifacts.councilVerdict,
+          routing: this.store.publicState().modelRouting,
+          generatedAt,
+        });
+        state.councilReports = [...(state.councilReports || []), artifacts.councilReports].slice(-20);
+        this.emit({
+          type: 'artifact',
+          role: 'orchestrator',
+          message: 'Council HTML 보고서와 Markdown 트랜스크립트를 생성했습니다.',
+          artifactType: 'council_reports',
+          artifact: artifacts.councilReports,
+          runId,
+        });
+      }
+
+      this._assertCurrent(runId, signal);
+      state.currentPlan = artifacts.councilVerdict;
+      state.planVersion = artifacts.councilVerdict.planVersion;
+      state.phase = 'awaiting_approval';
+      state.round = 2;
+      cycle.status = 'completed';
+      cycle.stage = state.phase;
+      cycle.completedAt = new Date().toISOString();
+      state.lastError = null;
+      state.currentEvaluation = this._councilProtocolEvaluation(cycle);
+      this.emit({
+        type: 'checkpoint',
+        role: 'orchestrator',
+        message: `Council verdict v${state.planVersion}: 승인할 수 있습니다.`,
+        artifactType: 'council_verdict',
+        artifact: artifacts.councilVerdict,
+        runId,
+      });
+      this.emit({
+        type: 'evaluation',
+        role: 'system',
+        message: '5관점 Council 프로토콜 게이트 평가 완료',
+        evaluation: state.currentEvaluation,
+        runId,
+      });
+      state.runId = null;
+      this.store.snapshot();
+      return artifacts.councilVerdict;
+    } catch (error) {
+      if (error.name === 'AbortError') {
+        if (state.runId === runId) {
+          state.phase = 'cancelled';
+          cycle.status = 'cancelled';
+          cycle.completedAt = new Date().toISOString();
+          state.runId = null;
+          this.store.snapshot();
+        }
+        return null;
+      }
+      if (state.runId !== runId) return null;
+      state.phase = 'failed';
+      cycle.status = 'failed';
+      state.lastError = {
+        stage: cycle.stage,
+        role: error.role || 'system',
+        retryable: true,
+        message: String(error.message || error).slice(0, 2_000),
+        at: new Date().toISOString(),
+      };
+      this.emit({ type: 'error', role: 'system', message: state.lastError.message, runId });
+      state.runId = null;
+      this.store.snapshot();
+      return null;
+    }
   }
 
   async _execute(cycle, runId, signal) {
@@ -775,6 +1325,53 @@ class PlanningEngine {
       gates,
       qualityScore: null,
       note: '의미 품질 점수는 독립 평가 하네스에서 별도로 산정합니다.',
+    };
+  }
+
+  _councilProtocolEvaluation(cycle) {
+    const state = this.store.get();
+    const artifacts = cycle.artifacts || {};
+    const advisorKeys = config.COUNCIL_ADVISOR_KEYS;
+    const mapping = artifacts.anonymizationMapping || {};
+    const auditRoles = new Set((state.sessionAudit || [])
+      .filter((entry) => Number(entry.cycle) === Number(cycle.number))
+      .map((entry) => entry.role));
+    const gates = {
+      neutralDecisionFrame: Boolean(artifacts.decisionFrame && !artifacts.decisionFrame.needsInput),
+      fiveIndependentAnalyses: advisorKeys.every((advisor) => (
+        artifacts.advisorAnalyses?.[advisor]?.advisor === advisor
+      )),
+      anonymousMappingComplete: validateAnonymousBundle({
+        mapping,
+        responses: artifacts.anonymousResponses,
+        advisorAnalyses: artifacts.advisorAnalyses,
+        advisorKeys,
+      }).length === 0,
+      fivePeerReviews: advisorKeys.every((reviewer) => (
+        artifacts.peerReviews?.[reviewer]?.reviewer === reviewer
+      )),
+      chairmanSynthesis: artifacts.councilVerdict?.artifactType === 'council_verdict',
+      roleRoutesAudited: auditRoles.has('councilFramer')
+        && auditRoles.has('councilChair')
+        && advisorKeys.every((advisor) => (
+          auditRoles.has(`councilAdvisor:${advisor}`)
+          && auditRoles.has(`councilReviewer:${advisor}`)
+        )),
+      reportsGenerated: Boolean(
+        artifacts.councilReports?.html?.name && artifacts.councilReports?.transcript?.name,
+      ),
+      hiddenReasoningAbsent: !state.transcript.some((event) => (
+        ['thinking', 'reasoning', 'chain_of_thought'].includes(event.type)
+      )),
+    };
+    return {
+      kind: 'council_protocol_gate',
+      passed: Object.values(gates).every(Boolean),
+      gates,
+      fallbackCount: (state.sessionAudit || []).filter((entry) => (
+        Number(entry.cycle) === Number(cycle.number) && Number(entry.routeIndex) > 0
+      )).length,
+      note: '다섯 독립 관점, 익명화, 동료평가, 의장 종합, 보고서 생성을 검증합니다.',
     };
   }
 }

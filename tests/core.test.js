@@ -164,6 +164,7 @@ function fakeBrain(options = {}) {
       options.feedback || prompt.includes('PRIOR_SYNTHESIS'),
     );
     else throw new Error(`unexpected schema ${kind}`);
+    if (kind === 'Synthesis' && options.invalidSynthesis) value = {};
     return { text: JSON.stringify(value), session: session || `session-${key}` };
   };
   fn.calls = calls;
@@ -279,6 +280,17 @@ test('retry는 저장된 checkpoint를 재검증하고 변조된 worker artifact
   assert.equal(store.get().phase, 'awaiting_approval');
   assert.equal(brain.calls.filter((call) => call.kind === 'Draft' && call.key === 'claude').length, 2);
   assert.equal(store.currentCycle().artifacts.claudeDraft.author, 'claude');
+});
+
+test('구조화 응답 재시도를 모두 소진하면 역할명이 포함된 검증 오류를 남긴다', async (t) => {
+  const store = fixtureStore(t);
+  const brain = fakeBrain({ invalidSynthesis: true });
+  const engine = new PlanningEngine({ store, brainCaller: brain });
+  await engine.runPlanning('구조화 오류 회귀 테스트').promise;
+  assert.equal(store.get().phase, 'failed');
+  assert.match(store.get().lastError.message, /Orchestrator의 synthesis 구조 검증에 실패했습니다/);
+  assert.doesNotMatch(store.get().lastError.message, /role is not defined/);
+  assert.equal(brain.calls.filter((call) => call.kind === 'Synthesis').length, config.loop.structuredRetries + 1);
 });
 
 test('취소 후 늦은 실행 결과가 현재 상태를 덮어쓰지 않는다', async (t) => {
@@ -413,9 +425,9 @@ test('피드백 통합안은 명시된 FB ID와 이전 분량·검증 기간을 
   assert.deepEqual(semanticErrors('synthesis', candidate, context), []);
 });
 
-test('synthesis 피드백 추적은 여러 cycle의 addressed ID 28개를 보존할 수 있다', () => {
+test('synthesis 피드백 추적은 실 E2E의 누적 ID 44개를 보존할 수 있다', () => {
   const candidate = synthesis(4, false, true);
-  candidate.feedbackTraceability = Array.from({ length: 28 }, (_, index) => ({
+  candidate.feedbackTraceability = Array.from({ length: 44 }, (_, index) => ({
     feedbackId: `TRACE-${index + 1}`,
     status: 'addressed',
     evidence: `cycle 누적 근거 ${index + 1}`,
