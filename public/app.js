@@ -52,7 +52,10 @@ const ui = {
   toggleSetup: byId('toggleSetup'),
   setupBody: byId('setupBody'),
   applySession: byId('applySession'),
+  applyRecommended: byId('applyRecommended'),
   configHint: byId('configHint'),
+  configSummary: byId('configSummary'),
+  modelGuidance: byId('modelGuidance'),
   councilMode: byId('councilMode'),
   decisionCouncilConfig: byId('decisionCouncilConfig'),
   councilPreset: byId('councilPreset'),
@@ -448,6 +451,8 @@ function normalizeOptions(payload = {}) {
     claude: normalizeProvider(source.claude || source.anthropic || {}),
     codex: normalizeProvider(source.codex || source.chatgpt || source.openai || {}),
     preflight: payload.preflight || payload.readiness || source.preflight || null,
+    modelReadiness: payload.modelReadiness || source.modelReadiness || null,
+    defaults: payload.defaults || source.defaults || {},
   };
 }
 
@@ -776,6 +781,7 @@ function renderConfig(config = {}) {
   ui.councilMode.value = config.mode === 'decision_council' ? 'decision_council' : 'planning';
   renderCouncilConfig(config.council || {});
   renderCouncilMode();
+  updateConfigSummary();
 }
 
 function gatherRoute(controls) {
@@ -851,9 +857,33 @@ function renderPreflight() {
     if (typeof value === 'boolean') return !value;
     return value && typeof value === 'object' && (value.ready === false || value.ok === false);
   });
-  ui.configHint.textContent = failing.length
-    ? `준비 확인 필요: ${failing.map(([key]) => key).join(', ')}`
-    : 'Claude와 Codex CLI 준비 상태가 확인되었습니다.';
+  const ready = !failing.length;
+  const modelReadiness = app.options?.modelReadiness || {};
+  const unavailable = Object.entries(modelReadiness)
+    .filter(([, value]) => value?.cliReady === false)
+    .map(([brain]) => brain);
+  ui.configHint.textContent = ready
+    ? (unavailable.length
+      ? `실행 불가 Provider: ${unavailable.join(', ')}. 나머지 경로만 사용할 수 있습니다.`
+      : 'Claude·Codex CLI 준비 상태가 확인되었습니다. 계정 권한·사용량 한도는 첫 호출에서 자동 점검하며, 실패 시 설정한 fallback으로 전환합니다.')
+    : `준비 확인 필요: ${failing.map(([key]) => key).join(', ')}`;
+  ui.configHint.classList.toggle('is-warning', !ready || unavailable.length > 0);
+}
+
+function routeDisplay(route = {}) {
+  if (!route.brain || !route.model) return '미설정';
+  return `${route.brain === 'codex' ? 'ChatGPT' : 'Claude'} · ${route.model}`;
+}
+
+function updateConfigSummary() {
+  if (!ui.configSummary || !app.options) return;
+  const config = gatherConfig();
+  const routes = config.mode === 'decision_council'
+    ? [...Object.values(config.council.advisors), config.council.chair]
+    : [config.orchestrator, config.claudeWorker, config.codexWorker];
+  const fallbackCount = routes.reduce((sum, route) => sum + (route.fallbacks?.length || 0), 0);
+  const primary = config.mode === 'decision_council' ? config.council.chair : config.orchestrator;
+  ui.configSummary.textContent = `영향 미리보기 · ${config.mode === 'decision_council' ? '6개 Council 역할' : '3개 협업 역할'} · 기본 ${routeDisplay(primary)} · fallback ${fallbackCount}개 · 최대 병렬 ${config.council.maxParallel}`;
 }
 
 const WORKFLOW_TOP_PHASES = new Set([
@@ -965,9 +995,13 @@ function createWorkflowCycleNode({
     badges.append(modelBadge);
   }
   if (events.some((event) => event.fallback)) {
+    const event = [...events].reverse().find((item) => item.fallback);
+    const from = event?.fallback?.from;
+    const to = event?.fallback?.to;
     const fallback = document.createElement('span');
     fallback.className = 'workflow-fallback-badge';
-    fallback.textContent = 'Fallback';
+    fallback.textContent = from && to ? `${from.model} → ${to.model}` : 'Fallback';
+    fallback.title = event?.fallback?.reason || 'Provider availability fallback';
     badges.append(fallback);
   }
   head.append(symbol, copy, badges);
@@ -3206,7 +3240,16 @@ ui.orcFallbackBrain.addEventListener('change', () => {
   ui.orcFallbackEffort.disabled = !ui.orcFallbackBrain.value;
 });
 ui.councilMode.addEventListener('change', renderCouncilMode);
-ui.councilPreset?.addEventListener('change', () => applyCouncilPreset(ui.councilPreset.value));
+ui.councilPreset?.addEventListener('change', () => { applyCouncilPreset(ui.councilPreset.value); updateConfigSummary(); });
+ui.setupBody?.addEventListener('change', () => updateConfigSummary());
+ui.applyRecommended?.addEventListener('click', () => {
+  const currentMode = ui.councilMode.value;
+  renderConfig({ ...app.options.defaults, mode: currentMode });
+  if (currentMode === 'decision_council') applyCouncilPreset('balanced');
+  ui.councilPreset.value = currentMode === 'decision_council' ? 'balanced' : '';
+  updateConfigSummary();
+  setTicker('최신 모델 기준의 권장 라우팅을 적용했습니다.');
+});
 ui.artifactFilter?.addEventListener('change', applyArtifactFilter);
 ui.workflowFollow?.addEventListener('click', () => {
   setWorkflowFollow(true);

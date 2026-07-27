@@ -631,6 +631,16 @@ textarea:disabled { opacity: .55; cursor: not-allowed; }
 textarea::placeholder { color: var(--color-smoke-gray); }
 
 .setup-actions { gap: 14px; margin-top: 14px; }
+.config-summary,
+.model-guidance {
+  flex-basis: 100%;
+  margin: 0;
+  color: var(--color-slate-gray);
+  font-size: 12px;
+  line-height: 1.55;
+}
+.config-summary { color: var(--color-ink-black); font-weight: 600; }
+.helper-text.is-warning { color: var(--color-sienna-brown); }
 
 .button {
   min-height: 42px;

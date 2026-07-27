@@ -28,6 +28,17 @@ function preflight() {
   return result;
 }
 
+function modelReadiness() {
+  const providers = preflight();
+  return Object.fromEntries(['claude', 'codex'].map((brain) => [brain, {
+    cliReady: Boolean(providers[brain]?.ready),
+    verification: providers[brain]?.ready ? 'ready_for_first_call' : 'cli_unavailable',
+    note: providers[brain]?.ready
+      ? '계정 권한·사용량 한도는 첫 호출에서 확인되며, 가용성 오류는 configured fallback으로 전환됩니다.'
+      : 'CLI를 찾을 수 없어 이 Provider의 모델을 실행할 수 없습니다.',
+  }]));
+}
+
 function createApp({
   store = defaultStore,
   engine = defaultEngine,
@@ -194,6 +205,7 @@ function createApp({
       tailnetHostname: normalizedAccessPolicy.tailnetHostname,
     },
     preflight: preflight(),
+    modelReadiness: modelReadiness(),
   }));
   app.get('/api/state', (req, res) => res.json(store.publicState()));
   app.get('/api/council/artifacts/:name', (req, res, next) => {
@@ -628,4 +640,4 @@ function startServer({ host = config.host, port = config.port } = {}) {
 
 if (require.main === module) startServer();
 
-module.exports = { createApp, startServer, isLoopback, preflight };
+module.exports = { createApp, startServer, isLoopback, modelReadiness, preflight };
