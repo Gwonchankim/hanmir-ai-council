@@ -31,6 +31,13 @@ const {
   revalidateDecisionCouncilArtifacts,
 } = require('./lib/council-flow');
 
+// prompts.harnessInstructions()가 내보내는 nonce-짝지어진 블록만 찾는다
+// (역할 하네스 마크다운 원문 블록). 데이터 블록은 다른 접두사
+// (AI_COUNCIL_DATA_)를 쓰므로 사용자/워커 산출물 텍스트가 이 정규식과
+// 우연히 충돌해 잘못된 구간이 치환될 수 없다. \1 역참조로 BEGIN/END의
+// nonce가 실제로 일치하는 블록만 매칭한다.
+const HARNESS_BLOCK_RE = /AI_COUNCIL_ROLE_HARNESS_([0-9a-f]{24})_BEGIN[\s\S]*?AI_COUNCIL_ROLE_HARNESS_\1_END/;
+
 class PlanningEngine {
   constructor({ store = defaultStore, brainCaller = defaultBrainCaller } = {}) {
     this.store = store;
@@ -90,17 +97,19 @@ class PlanningEngine {
       const harnessDigest = harnessMarkdown
         ? crypto.createHash('sha256').update(harnessMarkdown, 'utf8').digest('hex')
         : null;
-      const promptBinding = harnessDigest ? {
-        harnessRevision: this.store.currentCycle()?.harnessRevision ?? null,
-        harnessDigest,
-        promptHarnessDigest: callPrompt.includes(harnessMarkdown) ? harnessDigest : null,
-        included: callPrompt.includes(harnessMarkdown),
-      } : null;
+      // 원본(치환 전) callPrompt 안에서 전문 블록의 위치를 한 번만 찾는다.
+      // 아래 라우트 루프는 매 시도마다 이 원본 기준으로 다시 잘라내므로
+      // 누적 치환이 발생하지 않는다.
+      const harnessBlockMatch = harnessDigest ? callPrompt.match(HARNESS_BLOCK_RE) : null;
       let result = null;
       let activeRoute = null;
       let activeRouteIndex = preferredRouteIndex;
       let previousSession = null;
       let fallbackFrom = null;
+      // 실제로 전송된 프롬프트와 그 프롬프트가 하네스 전문을 포함했는지는
+      // 라우트별로 달라질 수 있으므로(세션마다 전달 이력이 다름) 성공한
+      // 시도의 값만 기록용으로 보존한다.
+      let sentPromptIncludedHarness = Boolean(harnessDigest) && callPrompt.includes(harnessMarkdown);
       for (let routeIndex = preferredRouteIndex; routeIndex < routes.length; routeIndex += 1) {
         const candidate = routes[routeIndex];
         const role = roleMeta(roleKey, candidate);
@@ -130,6 +139,18 @@ class PlanningEngine {
         state.routeSessions[roleKey] ||= {};
         previousSession = state.routeSessions[roleKey][sessionKey]
           || (routeIndex === 0 ? state.sessions[roleKey] : null);
+        // 이 라우트가 실제로 재개할 CLI 세션이 지금 하네스 digest를 이미
+        // 받았다면 전문 대신 짧은 참조문으로 치환한다. 새 세션·fork·복구는
+        // previousSession이 다르거나 없으므로 자동으로 전문을 다시 보낸다.
+        let routePrompt = callPrompt;
+        let routeIncludedHarness = sentPromptIncludedHarness;
+        if (harnessBlockMatch && previousSession
+          && this.store.hasHarnessDelivery(previousSession, harnessDigest)) {
+          routePrompt = callPrompt.slice(0, harnessBlockMatch.index)
+            + prompts.harnessReference(roleKey)
+            + callPrompt.slice(harnessBlockMatch.index + harnessBlockMatch[0].length);
+          routeIncludedHarness = false;
+        }
         this.emit({
           type: 'status',
           role: role.eventRole,
@@ -143,7 +164,7 @@ class PlanningEngine {
         try {
           result = await this.brainCaller({
             ...candidate,
-            prompt: callPrompt,
+            prompt: routePrompt,
             session: previousSession,
             schema: schemaFor(artifactType),
             signal,
@@ -164,6 +185,7 @@ class PlanningEngine {
           activeRoute = candidate;
           activeRouteIndex = routeIndex;
           preferredRouteIndex = routeIndex;
+          sentPromptIncludedHarness = routeIncludedHarness;
           break;
         } catch (error) {
           const hasNext = routeIndex + 1 < routes.length;
@@ -202,6 +224,22 @@ class PlanningEngine {
       const role = roleMeta(roleKey, activeRoute || selected);
       lastRole = role;
       if (!result?.session) throw new Error(`${role.label}가 세션 ID를 반환하지 않았습니다.`);
+      // promptBinding은 실제로 전송된 프롬프트(라우트별 치환 반영)를 기준으로
+      // 기록한다. callPrompt.includes(harnessMarkdown) 감사 로직과 동일한
+      // 진실 소스(sentPromptIncludedHarness)를 쓰므로 포함하지 않은 호출은
+      // included:false로 정확히 남는다.
+      const promptBinding = harnessDigest ? {
+        harnessRevision: this.store.currentCycle()?.harnessRevision ?? null,
+        harnessDigest,
+        promptHarnessDigest: sentPromptIncludedHarness ? harnessDigest : null,
+        included: sentPromptIncludedHarness,
+      } : null;
+      if (sentPromptIncludedHarness) {
+        // 다음 호출부터 이 세션은 짧은 참조문만 받도록 캐시한다. 실패한
+        // 호출(아래에서 재시도)이 이 세션을 폐기하면 캐시 항목은 자동으로
+        // 무의미해진다(새 세션 ID는 캐시에 없으므로 다시 전문이 전달된다).
+        this.store.recordHarnessDelivery(result.session, harnessDigest, roleKey);
+      }
       this.store.recordSessionInvocation({
         role: roleKey,
         artifactType,
@@ -238,8 +276,12 @@ class PlanningEngine {
               routeIndex: activeRouteIndex, usage: result.usage, runId,
             });
           }
+          // 이 결과의 durable 저장은 호출자(checkpointTask/checkpoint 등)나
+          // 다음 stage 진입이 담당한다 -- 같은 상태를 여기서 또 한 번
+          // 디스크에 쓰면 stage당 여러 번 중복 snapshot()이 발생한다
+          // (실측 근거: 성능 감사 항목 1). touch()만으로 in-memory
+          // updatedAt/레지스트리 동기화는 유지된다.
           this.store.touch();
-          this.store.snapshot();
           return artifact;
         }
       } catch (error) {
@@ -591,9 +633,13 @@ class PlanningEngine {
             'draft', { author: 'codex', harness: activeHarnesses.codexWorker }, runId, childSignal,
           )));
         }
+        // checkpointTask()가 각 워커 완료 시점에 artifacts[key] 대입과
+        // touch()+snapshot()을 이미 수행했다(재개 시 잃으면 안 되는 완료
+        // 경계). 여기서 같은 값을 다시 대입하고 전체 상태를 한 번 더
+        // 디스크에 쓰는 것은 방금 쓴 상태를 그대로 반복 쓰는 것뿐이므로
+        // 제거한다(성능 감사 항목 1).
         const values = await this._runPair(tasks, signal);
         keys.forEach((key, index) => { artifacts[key] = values[index]; });
-        this.store.snapshot();
       }
 
       if (!artifacts.claudeCritique || !artifacts.codexCritique) {
@@ -624,9 +670,9 @@ class PlanningEngine {
             }, runId, childSignal,
           )));
         }
+        // 위 drafting 블록과 동일한 이유로 중복 snapshot()을 생략한다.
         const values = await this._runPair(tasks, signal);
         keys.forEach((key, index) => { artifacts[key] = values[index]; });
-        this.store.snapshot();
       }
 
       artifacts.convergedAtR1 = convergenceReached(artifacts.claudeCritique, artifacts.codexCritique);
@@ -654,9 +700,9 @@ class PlanningEngine {
             'revision', { author: 'codex', harness: activeHarnesses.codexWorker }, runId, childSignal,
           )));
         }
+        // 위 drafting 블록과 동일한 이유로 중복 snapshot()을 생략한다.
         const values = await this._runPair(tasks, signal);
         keys.forEach((key, index) => { artifacts[key] = values[index]; });
-        this.store.snapshot();
       } else if (artifacts.convergedAtR1) {
         this.emit({ type: 'status', role: 'system', message: '양쪽 비평이 수렴하여 R2 개정을 생략합니다.', round: 1, runId });
       }

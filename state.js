@@ -18,6 +18,9 @@ const {
 const DATA_DIR = path.join(__dirname, 'data');
 const SNAPSHOT = path.join(DATA_DIR, 'session.json');
 const STATE_VERSION = 4;
+// 세션당(=CLI 프로세스당) 하네스 재전송 캐시의 최대 보관 항목 수.
+// 세션 ID 하나당 한 항목만 쓰므로 롱런 대화에서도 작게 유지된다.
+const HARNESS_DELIVERY_MAX_ENTRIES = 64;
 const RUNNING_PHASES = new Set([
   'harnessing', 'dispatching', 'drafting', 'critiquing', 'revising', 'synthesizing',
   'framing', 'independent_analysis', 'anonymous_peer_review', 'chair_synthesis',
@@ -153,6 +156,14 @@ function defaultState(sessionConfig = config.cloneDefaults()) {
     },
     harnessUserOverlays: { orchestrator: {}, claudeWorker: {}, codexWorker: {} },
     harnessHistory: [],
+    // 역할별 CLI 세션이 "현재 하네스 리비전 전문을 이미 받았는지" 추적하는
+    // 캐시. 키는 실제 CLI 세션/스레드 ID이므로 새 세션·fork·복구는 자동으로
+    // 캐시 미스가 되어 전문이 다시 전달된다.
+    harnessDelivery: {},
+    // snapshot()이 호출될 때마다 증가하는 단조 카운터. per-session 파일과
+    // legacy data/session.json 중 어느 쪽이 더 최근에 완료된 snapshot()
+    // 호출을 반영하는지 재시작 시 판별하는 데 쓴다.
+    snapshotSeq: 0,
     createdAt,
     updatedAt: createdAt,
   };
@@ -283,15 +294,59 @@ class StateStore {
     });
   }
 
+  // snapshot()은 per-session 파일 -> registry -> legacy session.json 순으로
+  // 개별 atomic write를 한다. 그 사이에 프로세스가 죽으면 legacy 파일이 옛
+  // 내용으로 남을 수 있으므로, 두 파일 중 실제로 더 최근에 "완료"된
+  // snapshot() 호출을 반영하는 쪽을 snapshotSeq(동률이면 updatedAt)로 고른다.
+  _snapshotRecency(filePath) {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+      return {
+        seq: Math.max(0, Number(parsed?.snapshotSeq) || 0),
+        updatedAt: Date.parse(parsed?.updatedAt || '') || 0,
+        parsed,
+      };
+    } catch (_) {
+      return { seq: -1, updatedAt: -1, parsed: null };
+    }
+  }
+
+  _resolveLoadSource() {
+    const legacyExists = fs.existsSync(this.snapshotPath);
+    const perSessionPath = this.registryActiveId ? this._snapshotFile(this.registryActiveId) : null;
+    const perSessionExists = Boolean(perSessionPath && fs.existsSync(perSessionPath));
+    if (!legacyExists) return perSessionExists ? { path: perSessionPath } : null;
+    if (!perSessionExists || perSessionPath === this.snapshotPath) return { path: this.snapshotPath };
+    const perSession = this._snapshotRecency(perSessionPath);
+    // 레지스트리가 가리키는 파일이 실제로 그 세션의 것인지 먼저 확인한다
+    // (레지스트리 손상 대비). 신뢰할 수 없으면 legacy로 안전하게 되돌아간다.
+    if (!perSession.parsed || perSession.parsed.sessionKey !== this.registryActiveId) {
+      return { path: this.snapshotPath };
+    }
+    const legacy = this._snapshotRecency(this.snapshotPath);
+    // legacy가 registryActiveId와 "같은 세션"을 담고 있을 때만 신선도를
+    // 비교한다. activateSession()은 세션을 전환하는 도중 registry가 아직
+    // 갱신되기 전에 legacy 파일에 다른(전환 대상) 세션의 내용을 의도적으로
+    // 먼저 써 두고 load()가 그것을 그대로 읽기를 기대한다 -- 그 경우
+    // legacy.sessionKey는 registryActiveId(옛 활성 세션)와 다르므로, 옛
+    // 활성 세션의 per-session 파일로 되돌리지 않고 legacy를 그대로 신뢰한다.
+    if (!legacy.parsed || legacy.parsed.sessionKey !== this.registryActiveId) {
+      return { path: this.snapshotPath };
+    }
+    const perSessionIsNewer = perSession.seq !== legacy.seq
+      ? perSession.seq > legacy.seq
+      : perSession.updatedAt > legacy.updatedAt;
+    return perSessionIsNewer ? { path: perSessionPath } : { path: this.snapshotPath };
+  }
+
   load() {
     this._loadRegistry();
-    if (!fs.existsSync(this.snapshotPath)) {
-      const recoveryPath = this.registryActiveId ? this._snapshotFile(this.registryActiveId) : null;
-      if (recoveryPath && fs.existsSync(recoveryPath)) {
-        atomicWriteJson(this.snapshotPath, JSON.parse(fs.readFileSync(recoveryPath, 'utf8')));
-      } else {
-        return this.state;
-      }
+    const source = this._resolveLoadSource();
+    if (!source) return this.state;
+    if (source.path !== this.snapshotPath) {
+      // per-session 스냅샷이 더 최근이다 -- crash 시점과 무관하게 가장 최근
+      // 커밋된 상태로 복원되도록 legacy 파일을 즉시 같은 내용으로 치유한다.
+      atomicWriteJson(this.snapshotPath, JSON.parse(fs.readFileSync(source.path, 'utf8')));
     }
     try {
       const parsed = JSON.parse(fs.readFileSync(this.snapshotPath, 'utf8'));
@@ -336,6 +391,19 @@ class StateStore {
           && !Array.isArray(parsed.routeSessions) ? parsed.routeSessions : {},
         routeHealth: parsed.routeHealth && typeof parsed.routeHealth === 'object'
           && !Array.isArray(parsed.routeHealth) ? parsed.routeHealth : {},
+        snapshotSeq: Math.max(0, Number(parsed.snapshotSeq) || 0),
+        harnessDelivery: parsed.harnessDelivery && typeof parsed.harnessDelivery === 'object'
+          && !Array.isArray(parsed.harnessDelivery)
+          ? Object.fromEntries(Object.entries(parsed.harnessDelivery)
+            .filter(([key, value]) => typeof key === 'string' && value && typeof value === 'object'
+              && /^[a-f0-9]{64}$/i.test(String(value.harnessDigest || '')))
+            .map(([key, value]) => [key, {
+              harnessDigest: String(value.harnessDigest).toLowerCase(),
+              role: typeof value.role === 'string' ? value.role : null,
+              at: typeof value.at === 'string' ? value.at : now(),
+            }])
+            .slice(-HARNESS_DELIVERY_MAX_ENTRIES))
+          : {},
         sessionAudit: Array.isArray(parsed.sessionAudit)
           ? parsed.sessionAudit.filter((entry) => entry && typeof entry === 'object')
             .slice(-config.limits.sessionAuditEntries)
@@ -1186,6 +1254,29 @@ class StateStore {
     this.touch();
   }
 
+  // 특정 CLI 세션이 주어진 하네스 digest를 이미 전달받았는지 확인한다.
+  // 세션 ID 자체가 키이므로 새 세션·fork·복구는 자동으로 미스가 된다.
+  hasHarnessDelivery(sessionId, harnessDigest) {
+    if (!sessionId || !harnessDigest) return false;
+    const record = this.state.harnessDelivery?.[sessionId];
+    return Boolean(record && record.harnessDigest === harnessDigest);
+  }
+
+  recordHarnessDelivery(sessionId, harnessDigest, role = null) {
+    if (!sessionId || !harnessDigest) return;
+    this.state.harnessDelivery ||= {};
+    this.state.harnessDelivery[sessionId] = { harnessDigest, role, at: now() };
+    const keys = Object.keys(this.state.harnessDelivery);
+    if (keys.length > HARNESS_DELIVERY_MAX_ENTRIES) {
+      const oldestFirst = keys.sort((a, b) => (
+        String(this.state.harnessDelivery[a].at).localeCompare(String(this.state.harnessDelivery[b].at))
+      ));
+      for (const key of oldestFirst.slice(0, keys.length - HARNESS_DELIVERY_MAX_ENTRIES)) {
+        delete this.state.harnessDelivery[key];
+      }
+    }
+  }
+
   touch() {
     this.state.updatedAt = now();
     this._syncSessionRegistry();
@@ -1193,6 +1284,11 @@ class StateStore {
 
   snapshot() {
     this._syncSessionRegistry();
+    // 단조 카운터: per-session 파일과 legacy session.json이 같은 호출에서
+    // 동일한 seq로 쓰인다. 재시작 시 두 파일 중 하나가 이전 호출의 옛
+    // 내용으로 남아 있으면(비원자적 3-파일 쓰기) load()가 이 값으로 더
+    // 최근에 완료된 쪽을 가려낸다.
+    this.state.snapshotSeq = Math.max(0, Number(this.state.snapshotSeq) || 0) + 1;
     const serializable = { ...this.state };
     delete serializable.sessionRegistry;
     atomicWriteJson(this._snapshotFile(this.state.sessionKey), serializable);

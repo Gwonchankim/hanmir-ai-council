@@ -119,6 +119,85 @@ test('full A/B session snapshots survive restart and activate round trips', (t) 
   assert.equal(restarted.get().currentPlan.title, 'Plan B');
 });
 
+test('load() recovers the freshest completed snapshot when legacy session.json lags after a mid-write crash', (t) => {
+  // snapshot() writes per-session file -> registry -> legacy session.json as
+  // three separate atomic writes. If the process dies after the per-session
+  // write but before the legacy write completes, legacy is left holding an
+  // older, already-superseded copy of the same session. load() must still
+  // recover the most recently *completed* snapshot() call, not the stale
+  // legacy file, regardless of exactly where the crash landed.
+  const { dir, snapshotPath, store } = fixture(t);
+  store.get().phase = 'awaiting_approval';
+  store.get().sessionTitle = 'Before crash';
+  store.appendEvent({ type: 'status', role: 'system', message: 'checkpoint 1' });
+  store.snapshot();
+  const sessionKey = store.get().sessionKey;
+  const perSessionFile = store._snapshotFile(sessionKey);
+  const staleLegacyContent = fs.readFileSync(snapshotPath, 'utf8');
+  const staleSeq = JSON.parse(staleLegacyContent).snapshotSeq;
+
+  // A later, fully completed snapshot() call: both files agree here.
+  store.get().sessionTitle = 'After crash';
+  store.appendEvent({ type: 'status', role: 'system', message: 'checkpoint 2 (latest committed work)' });
+  store.snapshot();
+  const freshSeq = JSON.parse(fs.readFileSync(perSessionFile, 'utf8')).snapshotSeq;
+  assert.ok(freshSeq > staleSeq);
+  assert.equal(JSON.parse(fs.readFileSync(snapshotPath, 'utf8')).snapshotSeq, freshSeq);
+
+  // Simulate the crash: only the legacy file failed to pick up the latest
+  // completed write (per-session file already reflects it, as above).
+  fs.writeFileSync(snapshotPath, staleLegacyContent, 'utf8');
+  assert.equal(JSON.parse(fs.readFileSync(snapshotPath, 'utf8')).sessionTitle, 'Before crash');
+  assert.equal(JSON.parse(fs.readFileSync(perSessionFile, 'utf8')).sessionTitle, 'After crash');
+
+  const recovered = new StateStore({ snapshotPath, autoLoad: true });
+  assert.equal(recovered.get().sessionKey, sessionKey);
+  assert.equal(recovered.get().sessionTitle, 'After crash');
+  assert.equal(recovered.get().transcript.length, 2);
+  assert.equal(recovered.get().transcript.at(-1).message, 'checkpoint 2 (latest committed work)');
+  assert.equal(recovered.get().snapshotSeq, freshSeq);
+  // load() self-heals legacy so a second restart (or another reader of
+  // data/session.json) also sees the recovered content immediately.
+  assert.equal(JSON.parse(fs.readFileSync(snapshotPath, 'utf8')).sessionTitle, 'After crash');
+
+  const dirEntries = fs.readdirSync(path.join(dir, 'sessions'));
+  assert.equal(dirEntries.length, 1);
+});
+
+test('harness delivery cache tracks per-session digests, survives restart, and evicts oldest entries', (t) => {
+  const { snapshotPath, store } = fixture(t);
+  const digestA = 'a'.repeat(64);
+  const digestB = 'b'.repeat(64);
+
+  assert.equal(store.hasHarnessDelivery('session-1', digestA), false);
+  store.recordHarnessDelivery('session-1', digestA, 'claudeWorker');
+  assert.equal(store.hasHarnessDelivery('session-1', digestA), true);
+  // A different digest for the same session (harness revision changed) is a
+  // miss -- the caller must resend the full harness.
+  assert.equal(store.hasHarnessDelivery('session-1', digestB), false);
+  // A different session id for the same digest (new session/fork/recovery)
+  // is also a miss.
+  assert.equal(store.hasHarnessDelivery('session-2', digestA), false);
+  // Missing arguments never produce a false "hit".
+  assert.equal(store.hasHarnessDelivery(null, digestA), false);
+  assert.equal(store.hasHarnessDelivery('session-1', null), false);
+  store.snapshot();
+
+  const restarted = new StateStore({ snapshotPath, autoLoad: true });
+  assert.equal(restarted.hasHarnessDelivery('session-1', digestA), true);
+
+  // Bounded cache: once more than HARNESS_DELIVERY_MAX_ENTRIES (64) distinct
+  // sessions have been recorded, the oldest entries are pruned so a
+  // long-running conversation cannot grow this map without bound.
+  for (let i = 0; i < 80; i += 1) {
+    restarted.recordHarnessDelivery(`bulk-session-${i}`, digestA, 'claudeWorker');
+  }
+  const keys = Object.keys(restarted.get().harnessDelivery);
+  assert.ok(keys.length <= 64);
+  assert.equal(restarted.hasHarnessDelivery('bulk-session-79', digestA), true);
+  assert.equal(restarted.hasHarnessDelivery('bulk-session-0', digestA), false);
+});
+
 test('activate validates snapshot identity before commit and rolls back on mismatch', (t) => {
   const { snapshotPath, store } = fixture(t);
   store.get().sessionTitle = 'Session A';
