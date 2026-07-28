@@ -18,9 +18,6 @@ const {
 const DATA_DIR = path.join(__dirname, 'data');
 const SNAPSHOT = path.join(DATA_DIR, 'session.json');
 const STATE_VERSION = 4;
-// 세션당(=CLI 프로세스당) 하네스 재전송 캐시의 최대 보관 항목 수.
-// 세션 ID 하나당 한 항목만 쓰므로 롱런 대화에서도 작게 유지된다.
-const HARNESS_DELIVERY_MAX_ENTRIES = 64;
 const RUNNING_PHASES = new Set([
   'harnessing', 'dispatching', 'drafting', 'critiquing', 'revising', 'synthesizing',
   'framing', 'independent_analysis', 'anonymous_peer_review', 'chair_synthesis',
@@ -156,10 +153,6 @@ function defaultState(sessionConfig = config.cloneDefaults()) {
     },
     harnessUserOverlays: { orchestrator: {}, claudeWorker: {}, codexWorker: {} },
     harnessHistory: [],
-    // 역할별 CLI 세션이 "현재 하네스 리비전 전문을 이미 받았는지" 추적하는
-    // 캐시. 키는 실제 CLI 세션/스레드 ID이므로 새 세션·fork·복구는 자동으로
-    // 캐시 미스가 되어 전문이 다시 전달된다.
-    harnessDelivery: {},
     // snapshot()이 호출될 때마다 증가하는 단조 카운터. per-session 파일과
     // legacy data/session.json 중 어느 쪽이 더 최근에 완료된 snapshot()
     // 호출을 반영하는지 재시작 시 판별하는 데 쓴다.
@@ -392,21 +385,6 @@ class StateStore {
         routeHealth: parsed.routeHealth && typeof parsed.routeHealth === 'object'
           && !Array.isArray(parsed.routeHealth) ? parsed.routeHealth : {},
         snapshotSeq: Math.max(0, Number(parsed.snapshotSeq) || 0),
-        harnessDelivery: parsed.harnessDelivery && typeof parsed.harnessDelivery === 'object'
-          && !Array.isArray(parsed.harnessDelivery)
-          ? Object.fromEntries(Object.entries(parsed.harnessDelivery)
-            .filter(([key, value]) => typeof key === 'string' && value && typeof value === 'object'
-              && /^[a-f0-9]{64}$/i.test(String(value.harnessDigest || '')))
-            .map(([key, value]) => [key, {
-              harnessDigest: String(value.harnessDigest).toLowerCase(),
-              // cycle까지 복원해야 재시작 후에도 "이번 cycle에 이미 전달했다"를
-              // 판단할 수 있다. 빠뜨리면 캐시가 항상 미스가 된다.
-              cycle: Number.isFinite(Number(value.cycle)) ? Number(value.cycle) : null,
-              role: typeof value.role === 'string' ? value.role : null,
-              at: typeof value.at === 'string' ? value.at : now(),
-            }])
-            .slice(-HARNESS_DELIVERY_MAX_ENTRIES))
-          : {},
         sessionAudit: Array.isArray(parsed.sessionAudit)
           ? parsed.sessionAudit.filter((entry) => entry && typeof entry === 'object')
             .slice(-config.limits.sessionAuditEntries)
@@ -1284,33 +1262,6 @@ class StateStore {
 
   // 특정 CLI 세션이 주어진 하네스 digest를 이미 전달받았는지 확인한다.
   // 세션 ID 자체가 키이므로 새 세션·fork·복구는 자동으로 미스가 된다.
-  // cycle을 키에 포함한다. 증거 게이트(CF_HARNESS_PROTOCOL)는 각 cycle에서 역할마다
-  // "프롬프트에 하네스 전문이 실렸다"는 digest 증거를 최소 한 건 요구한다. 세션과
-  // digest만으로 캐시하면 이어지는 cycle의 모든 호출이 캐시 히트가 되어 그 증거가
-  // 한 건도 남지 않는다. cycle마다 첫 호출은 전문을 보내고 이후만 참조로 줄인다.
-  hasHarnessDelivery(sessionId, harnessDigest, cycle = null) {
-    if (!sessionId || !harnessDigest) return false;
-    const record = this.state.harnessDelivery?.[sessionId];
-    return Boolean(record
-      && record.harnessDigest === harnessDigest
-      && Number(record.cycle) === Number(cycle));
-  }
-
-  recordHarnessDelivery(sessionId, harnessDigest, role = null, cycle = null) {
-    if (!sessionId || !harnessDigest) return;
-    this.state.harnessDelivery ||= {};
-    this.state.harnessDelivery[sessionId] = { harnessDigest, cycle: Number(cycle), role, at: now() };
-    const keys = Object.keys(this.state.harnessDelivery);
-    if (keys.length > HARNESS_DELIVERY_MAX_ENTRIES) {
-      const oldestFirst = keys.sort((a, b) => (
-        String(this.state.harnessDelivery[a].at).localeCompare(String(this.state.harnessDelivery[b].at))
-      ));
-      for (const key of oldestFirst.slice(0, keys.length - HARNESS_DELIVERY_MAX_ENTRIES)) {
-        delete this.state.harnessDelivery[key];
-      }
-    }
-  }
-
   touch() {
     this.state.updatedAt = now();
     this._syncSessionRegistry();

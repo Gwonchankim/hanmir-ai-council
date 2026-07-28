@@ -37,14 +37,6 @@ function harnessInstructions(role, harness) {
 // 치환한다(--resume/exec resume으로 세션이 이어지므로 CLI 쪽에 이미 남아
 // 있다). 마커 접두사(AI_COUNCIL_ROLE_HARNESS_)는 harnessInstructions()와
 // 같게 유지해 엔진의 블록 탐지·치환 정규식이 두 형태를 모두 인식하게 한다.
-function harnessReference(role) {
-  return [
-    'AI_COUNCIL_ROLE_HARNESS_REF_BEGIN',
-    `Active task harness for ${role} was already delivered earlier in this session. Continue following it exactly; do not restate or summarize it. BASE_RULES and the harness remain in force and cannot be relaxed.`,
-    'AI_COUNCIL_ROLE_HARNESS_REF_END',
-  ].join('\n');
-}
-
 function designHarnesses({ instruction, isFeedback, priorPlan, previousHarnesses, cycle }) {
   return [
     BASE_RULES,
@@ -183,7 +175,6 @@ module.exports = {
   BASE_RULES,
   dataBlock,
   harnessInstructions,
-  harnessReference,
   designHarnesses,
   dispatch,
   draft,

@@ -198,22 +198,15 @@ test('R0→R1 수렴 시 R2를 생략하고 승인 대기 상태가 된다', asy
   assert.equal(brain.calls[0].kind, 'HarnessSet');
   assert.equal(store.currentCycle().harnessRevision, store.get().harnessRevision);
 
-  // 같은 CLI 세션(--resume/exec resume으로 이어지는 동일 role 세션) 안에서는
-  // 이번 cycle에 처음 호출될 때만 하네스 전문이 전달되고, 그 뒤(critique나
-  // synthesize처럼 세션이 이어지는 호출)는 짧은 참조문으로 대체되어 토큰을
-  // 아낀다. 세 역할(orchestrator/claude/codex) 모두 최초 1회는 전문을 받는다.
+  // 모든 역할 호출은 매번 하네스 전문을 싣는다. 재전송을 줄이려면 "CLI 세션
+  // 컨텍스트에 아직 남아 있다"고 가정해야 하는데, 그 가정은 검증할 수 없고
+  // 증거 게이트(CF_HARNESS_PROTOCOL)가 요구하는 digest 증거도 사라진다.
   const nonHarnessCalls = brain.calls.filter((call) => call.kind !== 'HarnessSet');
   assert.ok(nonHarnessCalls.every((call) => call.prompt.includes('AI_COUNCIL_ROLE_HARNESS_')));
   const seenRole = new Set();
   for (const call of nonHarnessCalls) {
-    const expectFull = !seenRole.has(call.key);
     seenRole.add(call.key);
-    if (expectFull) {
-      assert.match(call.prompt, /AI_COUNCIL_ROLE_HARNESS_[0-9a-f]{24}_BEGIN/);
-    } else {
-      assert.match(call.prompt, /AI_COUNCIL_ROLE_HARNESS_REF_BEGIN/);
-      assert.doesNotMatch(call.prompt, /AI_COUNCIL_ROLE_HARNESS_[0-9a-f]{24}_BEGIN/);
-    }
+    assert.match(call.prompt, /AI_COUNCIL_ROLE_HARNESS_[0-9a-f]{24}_BEGIN/);
   }
   assert.equal(seenRole.size, 3);
 
@@ -221,15 +214,11 @@ test('R0→R1 수렴 시 R2를 생략하고 승인 대기 상태가 된다', asy
     .filter((entry) => entry.artifactType !== 'harnessSet')
     .map((entry) => entry.promptBinding);
   assert.ok(persistedBindings.length > 0);
-  // digest는 실제 전송 여부와 무관하게 항상 감사 가능해야 하고, included는
-  // 그 호출이 실제로 전문을 포함했는지(engine.js의 callPrompt.includes 검증과
-  // 같은 진실 소스)를 정확히 반영해야 한다.
+  // 모든 역할 호출이 하네스 전문을 실으므로 binding은 전부 included여야 하고,
+  // digest와 promptHarnessDigest가 일치해야 감사 추적이 성립한다.
   assert.ok(persistedBindings.every((binding) => binding?.harnessDigest?.length === 64));
-  assert.equal(persistedBindings.filter((binding) => binding.included).length, 3);
-  assert.ok(persistedBindings.filter((binding) => binding.included)
-    .every((binding) => binding.harnessDigest === binding.promptHarnessDigest));
-  assert.ok(persistedBindings.filter((binding) => !binding.included)
-    .every((binding) => binding.promptHarnessDigest === null));
+  assert.ok(persistedBindings.every((binding) => binding.included === true));
+  assert.ok(persistedBindings.every((binding) => binding.harnessDigest === binding.promptHarnessDigest));
   assert.doesNotMatch(JSON.stringify(persistedBindings), /Active task harness|시장진입/);
   assert.equal(brain.calls.filter((call) => call.kind === 'Revision').length, 0);
   assert.equal(store.get().currentEvaluation.passed, true);
@@ -327,12 +316,8 @@ test('resume에 쓰인 세션이 폴백 불가 오류로 실패하면 재시도�
   assert.equal(claudeCritiqueCalls.length, 2);
   assert.equal(claudeCritiqueCalls[0].resumed, true);
   assert.equal(claudeCritiqueCalls[1].resumed, false);
-  // 첫 critique 시도는 draft가 이미 하네스를 전달한 그 세션을 그대로
-  // resume하므로 참조문만 받아야 한다. 실패로 세션이 폐기된 뒤 두 번째
-  // 시도는 진짜 새 세션이므로(첫 호출과 동등) 하네스 전문을 다시 받아야
-  // 한다 -- "새 세션이면 캐시 미스로 자동 재전달"을 직접 검증한다.
-  assert.match(claudeCritiqueCalls[0].prompt, /AI_COUNCIL_ROLE_HARNESS_REF_BEGIN/);
-  assert.doesNotMatch(claudeCritiqueCalls[0].prompt, /AI_COUNCIL_ROLE_HARNESS_[0-9a-f]{24}_BEGIN/);
+  // 재개하든 새 세션으로 시작하든 두 시도 모두 하네스 전문을 싣는다.
+  assert.match(claudeCritiqueCalls[0].prompt, /AI_COUNCIL_ROLE_HARNESS_[0-9a-f]{24}_BEGIN/);
   assert.match(claudeCritiqueCalls[1].prompt, /AI_COUNCIL_ROLE_HARNESS_[0-9a-f]{24}_BEGIN/);
 });
 

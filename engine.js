@@ -31,13 +31,6 @@ const {
   revalidateDecisionCouncilArtifacts,
 } = require('./lib/council-flow');
 
-// prompts.harnessInstructions()가 내보내는 nonce-짝지어진 블록만 찾는다
-// (역할 하네스 마크다운 원문 블록). 데이터 블록은 다른 접두사
-// (AI_COUNCIL_DATA_)를 쓰므로 사용자/워커 산출물 텍스트가 이 정규식과
-// 우연히 충돌해 잘못된 구간이 치환될 수 없다. \1 역참조로 BEGIN/END의
-// nonce가 실제로 일치하는 블록만 매칭한다.
-const HARNESS_BLOCK_RE = /AI_COUNCIL_ROLE_HARNESS_([0-9a-f]{24})_BEGIN[\s\S]*?AI_COUNCIL_ROLE_HARNESS_\1_END/;
-
 class PlanningEngine {
   constructor({ store = defaultStore, brainCaller = defaultBrainCaller } = {}) {
     this.store = store;
@@ -97,13 +90,6 @@ class PlanningEngine {
       const harnessDigest = harnessMarkdown
         ? crypto.createHash('sha256').update(harnessMarkdown, 'utf8').digest('hex')
         : null;
-      // 원본(치환 전) callPrompt 안에서 전문 블록의 위치를 한 번만 찾는다.
-      // 아래 라우트 루프는 매 시도마다 이 원본 기준으로 다시 잘라내므로
-      // 누적 치환이 발생하지 않는다.
-      const harnessBlockMatch = harnessDigest ? callPrompt.match(HARNESS_BLOCK_RE) : null;
-      // 전달 캐시의 cycle 키. context.cycle은 일부 호출(draft/critique 등)에서
-      // 비어 있으므로 엔진의 현재 cycle을 단일 기준으로 삼는다.
-      const harnessCycleNumber = this.store.currentCycle()?.number ?? null;
       let result = null;
       let activeRoute = null;
       let activeRouteIndex = preferredRouteIndex;
@@ -142,20 +128,6 @@ class PlanningEngine {
         state.routeSessions[roleKey] ||= {};
         previousSession = state.routeSessions[roleKey][sessionKey]
           || (routeIndex === 0 ? state.sessions[roleKey] : null);
-        // 이 라우트가 실제로 재개할 CLI 세션이 이번 cycle에 하네스 digest를 이미
-        // 받았다면 전문 대신 짧은 참조문으로 치환한다. 새 세션·fork·복구는
-        // previousSession이 다르거나 없으므로 자동으로 전문을 다시 보낸다.
-        // cycle 경계에서는 항상 전문을 다시 보내 증거 게이트가 요구하는
-        // digest 증거를 역할마다 한 건씩 남긴다.
-        let routePrompt = callPrompt;
-        let routeIncludedHarness = sentPromptIncludedHarness;
-        if (harnessBlockMatch && previousSession
-          && this.store.hasHarnessDelivery(previousSession, harnessDigest, harnessCycleNumber)) {
-          routePrompt = callPrompt.slice(0, harnessBlockMatch.index)
-            + prompts.harnessReference(roleKey)
-            + callPrompt.slice(harnessBlockMatch.index + harnessBlockMatch[0].length);
-          routeIncludedHarness = false;
-        }
         this.emit({
           type: 'status',
           role: role.eventRole,
@@ -169,7 +141,7 @@ class PlanningEngine {
         try {
           result = await this.brainCaller({
             ...candidate,
-            prompt: routePrompt,
+            prompt: callPrompt,
             session: previousSession,
             schema: schemaFor(artifactType),
             signal,
@@ -190,7 +162,6 @@ class PlanningEngine {
           activeRoute = candidate;
           activeRouteIndex = routeIndex;
           preferredRouteIndex = routeIndex;
-          sentPromptIncludedHarness = routeIncludedHarness;
           break;
         } catch (error) {
           const hasNext = routeIndex + 1 < routes.length;
@@ -239,12 +210,6 @@ class PlanningEngine {
         promptHarnessDigest: sentPromptIncludedHarness ? harnessDigest : null,
         included: sentPromptIncludedHarness,
       } : null;
-      if (sentPromptIncludedHarness) {
-        // 다음 호출부터 이 세션은 짧은 참조문만 받도록 캐시한다. 실패한
-        // 호출(아래에서 재시도)이 이 세션을 폐기하면 캐시 항목은 자동으로
-        // 무의미해진다(새 세션 ID는 캐시에 없으므로 다시 전문이 전달된다).
-        this.store.recordHarnessDelivery(result.session, harnessDigest, roleKey, harnessCycleNumber);
-      }
       this.store.recordSessionInvocation({
         role: roleKey,
         artifactType,
