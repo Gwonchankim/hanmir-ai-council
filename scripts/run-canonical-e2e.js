@@ -725,11 +725,35 @@ async function main() {
   } finally {
     engine.brainCaller = originalBrainCaller;
     app.locals.closeStreams();
-    await new Promise((resolve) => server.close(resolve));
+    // SSE 응답이 하나라도 살아 있으면 server.close()의 콜백이 오지 않아 이 await가
+    // 영원히 pending 상태가 된다. 그러면 프로세스가 종료되지 못하고 매달리고,
+    // 실행기가 죽이면서 실패가 exit 0으로 집계된다. 연결을 강제로 끊고,
+    // 그래도 닫히지 않으면 기다리지 않는다.
+    server.closeAllConnections?.();
+    await Promise.race([
+      new Promise((resolve) => server.close(resolve)),
+      new Promise((resolve) => setTimeout(resolve, 2_000)),
+    ]);
   }
 }
 
-if (require.main === module) main();
+// 실패는 반드시 종료 코드로 드러나야 한다.
+// process.exitCode만 설정하면 정리 단계에 남은 핸들이나 삼켜진 예외 때문에 그 값이
+// 종료까지 살아남지 못하는 경우가 있었다. 실제로 증거 게이트가 실패했는데도 exit 0이
+// 보고되어, CI에 걸었다면 통과로 집계됐을 상황이었다. 명시적으로 끝낸다.
+function runAsScript(entry) {
+  const fail = (error) => {
+    process.stderr.write(`${error?.stack || error}\n`);
+    process.exit(1);
+  };
+  process.on('unhandledRejection', fail);
+  process.on('uncaughtException', fail);
+  entry()
+    .then(() => process.exit(process.exitCode || 0))
+    .catch(fail);
+}
+
+if (require.main === module) runAsScript(main);
 
 module.exports = {
   HARNESS_OVERRIDE_TEXT,
