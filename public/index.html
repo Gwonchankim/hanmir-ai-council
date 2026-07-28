@@ -299,7 +299,10 @@
 
               <div id="workflowViewport" class="workflow-viewport" tabindex="0"
                    aria-label="현재 Council 실행 Workflow">
-                <div id="workflowCycles" class="workflow-cycles" aria-live="polite"></div>
+                <!-- aria-live 없음: 이 컨테이너는 이벤트마다 replaceChildren으로 전체가
+                     새로 만들어져, live 영역으로 두면 Cycle 전체가 매번 다시 낭독된다.
+                     단계 전환 알림은 role="status"인 #ticker가 담당한다. -->
+                <div id="workflowCycles" class="workflow-cycles"></div>
                 <div class="workflow-track hidden" aria-hidden="true">
                   <div id="workflowIngress" class="workflow-ingress" aria-hidden="true">
                     <span>사용자 요청</span>
@@ -317,7 +320,7 @@
                       <span id="orchestratorCount" class="message-count" aria-label="Orchestrator 메시지 수">0</span>
                     </header>
                     <p id="workflowOrchestratorStatus" class="workflow-node-status" role="status">사용자 지시를 기다리고 있습니다.</p>
-                    <div id="orchestratorMessages" class="lane-messages workflow-node-messages" aria-live="polite">
+                    <div id="orchestratorMessages" class="lane-messages workflow-node-messages">
                       <p class="empty-state">과업 분해와 Agent 전달 내용이 이곳에 표시됩니다.</p>
                     </div>
                   </article>
@@ -343,7 +346,7 @@
                         <span id="claudeCount" class="message-count" aria-label="Claude 메시지 수">0</span>
                       </header>
                       <p id="workflowClaudeStatus" class="workflow-node-status" role="status">대기 중</p>
-                      <div id="claudeMessages" class="lane-messages workflow-node-messages" aria-live="polite">
+                      <div id="claudeMessages" class="lane-messages workflow-node-messages">
                         <p class="empty-state">Claude의 현재 작업과 공개 결과가 표시됩니다.</p>
                       </div>
                     </article>
@@ -359,7 +362,7 @@
                         <span id="codexCount" class="message-count" aria-label="ChatGPT 메시지 수">0</span>
                       </header>
                       <p id="workflowCodexStatus" class="workflow-node-status" role="status">대기 중</p>
-                      <div id="codexMessages" class="lane-messages workflow-node-messages" aria-live="polite">
+                      <div id="codexMessages" class="lane-messages workflow-node-messages">
                         <p class="empty-state">ChatGPT의 현재 작업과 공개 결과가 표시됩니다.</p>
                       </div>
                     </article>
@@ -385,7 +388,7 @@
                       <span class="workflow-return-badge">Final</span>
                     </header>
                     <p id="workflowReturnStatus" class="workflow-node-status" role="status">Agent 결과를 기다리고 있습니다.</p>
-                    <div id="orchestratorReturnMessages" class="lane-messages workflow-node-messages" aria-live="polite">
+                    <div id="orchestratorReturnMessages" class="lane-messages workflow-node-messages">
                       <p class="empty-state">Agent 결과가 돌아오면 통합 판단이 이곳에 생성됩니다.</p>
                     </div>
                   </article>
