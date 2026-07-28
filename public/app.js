@@ -26,6 +26,7 @@ const ui = {
   phaseElapsed: byId('phaseElapsed'),
   globalErrorText: byId('globalErrorText'),
   globalErrorDismiss: byId('globalErrorDismiss'),
+  sessionOrderToggle: byId('sessionOrderToggle'),
   roundValue: byId('roundValue'),
   cycleValue: byId('cycleValue'),
   planVersionValue: byId('planVersionValue'),
@@ -3510,6 +3511,26 @@ function renderSessions(sessions = [], activeSessionId = app.activeSessionId) {
     archiveButton.setAttribute('aria-label', `${session.title} ${session.archivedAt ? '복원' : '보관'}`);
     actions.append(renameButton, archiveButton);
 
+    // 순서 이동은 '순서 수정' 모드에서만 노출한다. 목록은 세션을 열어도 재배치되지
+    // 않으므로, 순서를 바꾸는 유일한 경로가 이 버튼이다.
+    const order = document.createElement('div');
+    order.className = 'session-order rail-label';
+    const moveUp = document.createElement('button');
+    moveUp.type = 'button';
+    moveUp.className = 'session-action session-move';
+    moveUp.textContent = '↑';
+    moveUp.setAttribute('aria-label', `${session.title} 위로 이동`);
+    moveUp.disabled = index === 0;
+    const moveDown = document.createElement('button');
+    moveDown.type = 'button';
+    moveDown.className = 'session-action session-move';
+    moveDown.textContent = '↓';
+    moveDown.setAttribute('aria-label', `${session.title} 아래로 이동`);
+    moveDown.disabled = index === normalized.length - 1;
+    moveUp.addEventListener('click', () => moveSession(session.id, 'up', moveUp));
+    moveDown.addEventListener('click', () => moveSession(session.id, 'down', moveDown));
+    order.append(moveUp, moveDown);
+
     const editor = document.createElement('form');
     editor.className = 'session-rename rail-label hidden';
     const input = document.createElement('input');
@@ -3548,7 +3569,7 @@ function renderSessions(sessions = [], activeSessionId = app.activeSessionId) {
       updateSessionMetadata(session, { archived: !session.archivedAt }, archiveButton);
     });
 
-    item.append(button, actions, editor);
+    item.append(button, actions, order, editor);
     ui.sessionList.append(item);
   });
 }
@@ -3602,6 +3623,28 @@ async function updateSessionMetadata(session, changes, button) {
         ? '세션을 복원했습니다.'
         : '세션 이름을 변경했습니다.');
   }).catch(async () => { await loadSessions(); });
+}
+
+// 목록 순서 변경. 활성 세션은 바뀌지 않으므로 실행 중에도 안전하다.
+async function moveSession(sessionId, direction, button) {
+  await performAction(button, async () => {
+    const payload = await post(`/api/sessions/${encodeURIComponent(sessionId)}/move`, { direction });
+    if (Array.isArray(payload.sessions)) renderSessions(payload.sessions, app.activeSessionId);
+    else await loadSessions();
+    // 재렌더로 사라진 버튼 대신, 같은 세션의 같은 방향 버튼으로 초점을 되돌린다.
+    const moved = ui.sessionList.querySelector(`[data-session-id="${CSS.escape(sessionId)}"]`);
+    const again = moved?.querySelectorAll('.session-move')[direction === 'up' ? 0 : 1];
+    if (again && !again.disabled) again.focus();
+  }).catch(() => {});
+}
+
+function setSessionOrderMode(enabled) {
+  app.sessionOrderMode = Boolean(enabled);
+  document.body.dataset.sessionOrder = app.sessionOrderMode ? 'edit' : 'locked';
+  ui.sessionOrderToggle?.setAttribute('aria-pressed', String(app.sessionOrderMode));
+  if (ui.sessionOrderToggle) {
+    ui.sessionOrderToggle.textContent = app.sessionOrderMode ? '순서 완료' : '순서 수정';
+  }
 }
 
 async function activateSession(sessionId) {
@@ -4088,6 +4131,9 @@ ui.artifactReader?.addEventListener('click', (event) => {
 });
 // 예전에는 다른 동작이 showError('')를 부를 때까지 배너를 치울 방법이 없었다.
 ui.globalErrorDismiss?.addEventListener('click', () => showError(''));
+
+ui.sessionOrderToggle?.addEventListener('click', () => setSessionOrderMode(!app.sessionOrderMode));
+setSessionOrderMode(false);
 
 ui.workflowFollow?.addEventListener('click', () => {
   // aria-pressed 토글 버튼인데 항상 true로 두면 눌린 상태를 해제할 수 없다.

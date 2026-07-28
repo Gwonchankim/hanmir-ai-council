@@ -653,11 +653,36 @@ class StateStore {
     if (!this.state || !this.state.sessionKey) return;
     const metadata = this._metadataForCurrentSession();
     const index = this.registry.findIndex((entry) => (entry.id || entry.sessionKey) === metadata.id);
+    // 목록 순서는 사용자가 소유한다. updatedAt으로 다시 정렬하면 세션을 열기만 해도
+    // 그 세션이 맨 위로 튀어 목록이 계속 재배치된다. 기존 항목은 제자리에서
+    // 갱신하고, 새 세션만 맨 앞에 넣는다. 순서 변경은 moveSession()으로만 한다.
     if (index >= 0) this.registry[index] = metadata;
-    else this.registry.push(metadata);
-    this.registry = this.registry
-      .sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')))
-      .slice(0, config.limits.sessionRegistryEntries);
+    else this.registry.unshift(metadata);
+    this.registry = this.registry.slice(0, config.limits.sessionRegistryEntries);
+  }
+
+  // 목록에서 세션을 한 칸 위/아래로 옮긴다. 경계에서는 아무 일도 하지 않는다.
+  moveSession(sessionKey, direction) {
+    const id = String(sessionKey || '');
+    const step = direction === 'up' ? -1 : 1;
+    if (direction !== 'up' && direction !== 'down') {
+      const error = new Error('이동 방향은 up 또는 down이어야 합니다.');
+      error.status = 400;
+      throw error;
+    }
+    this._syncSessionRegistry();
+    const index = this.registry.findIndex((entry) => (entry.id || entry.sessionKey) === id);
+    if (index < 0) {
+      const error = new Error(`세션을 찾을 수 없습니다: ${id}`);
+      error.status = 404;
+      throw error;
+    }
+    const target = index + step;
+    if (target < 0 || target >= this.registry.length) return this.listSessions({ scope: 'all' });
+    const [entry] = this.registry.splice(index, 1);
+    this.registry.splice(target, 0, entry);
+    this._writeRegistry();
+    return this.listSessions({ scope: 'all' });
   }
 
   listSessions({ q = '', scope = 'active' } = {}) {
@@ -793,7 +818,7 @@ class StateStore {
     this.registry[index] = {
       ...this.registry[index], title, archivedAt, metadataVersion, updatedAt,
     };
-    this.registry = this.registry.sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')));
+    // 이름 변경·보관도 목록 순서를 건드리지 않는다(순서는 moveSession 전용).
     this._writeRegistry();
     return this.sessionMetadata(id);
   }

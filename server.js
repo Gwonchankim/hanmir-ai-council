@@ -409,6 +409,14 @@ function createApp({
     } catch (error) { next(error); }
   });
 
+  // 목록 순서는 활성화와 무관하게 사용자가 직접 정한다.
+  app.post('/api/sessions/:id/move', (req, res, next) => {
+    try {
+      const direction = String(req.body?.direction || '');
+      res.json({ ok: true, sessions: store.moveSession(req.params.id, direction) });
+    } catch (error) { next(error); }
+  });
+
   app.get('/api/harnesses', (req, res) => sendHarnessState(res));
 
   app.get('/api/harnesses/history', (req, res, next) => {
