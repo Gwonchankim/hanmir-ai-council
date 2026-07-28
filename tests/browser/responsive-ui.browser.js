@@ -533,9 +533,16 @@ async function verifyWorkflowVisualization(client) {
       splitConnectors: cycle.querySelectorAll('.workflow-cycle-connector.is-split').length,
       mergeConnectors: cycle.querySelectorAll('.workflow-cycle-connector.is-merge').length,
       splitPaths: cycle.querySelectorAll('.workflow-cycle-connector.is-split .workflow-connector-flow').length,
-      splitArrows: cycle.querySelectorAll('.workflow-cycle-connector.is-split .workflow-connector-desktop-path.workflow-connector-flow[marker-end]').length,
+      splitArrows: cycle.querySelectorAll('.workflow-cycle-connector.is-split .workflow-connector-desktop-tip').length,
       mergePaths: cycle.querySelectorAll('.workflow-cycle-connector.is-merge .workflow-connector-flow').length,
-      mergeArrow: cycle.querySelectorAll('.workflow-cycle-connector.is-merge .workflow-connector-desktop-path.workflow-connector-flow[marker-end]').length,
+      mergeArrow: cycle.querySelectorAll('.workflow-cycle-connector.is-merge .workflow-connector-desktop-tip').length,
+      // SVG 마커는 preserveAspectRatio="none"의 비등방 스케일에 눌려 바늘처럼 찌그러진다.
+      svgMarkerArrows: cycle.querySelectorAll('.workflow-connector-flow[marker-end]').length,
+      tipBox: (() => {
+        const tip = cycle.querySelector('.workflow-cycle-connector.is-split .workflow-connector-desktop-tip');
+        const box = tip.getBoundingClientRect();
+        return { w: Math.round(box.width), h: Math.round(box.height) };
+      })(),
       modelText: cycle.textContent,
       followLabel: document.querySelector('#workflowFollowLabel').textContent,
       followPressed: document.querySelector('#workflowFollow').getAttribute('aria-pressed'),
@@ -554,6 +561,11 @@ async function verifyWorkflowVisualization(client) {
   assert.equal(state.splitArrows, 2, 'split connector needs one arrow per worker');
   assert.equal(state.mergePaths, 3, 'merge connector needs smooth routes from both workers plus a mobile fallback');
   assert.equal(state.mergeArrow, 1, 'merge connector needs a single return arrow');
+  assert.equal(state.svgMarkerArrows, 0, 'arrowheads must not regress to distortion-prone SVG markers');
+  assert.ok(
+    state.tipBox.w >= 8 && state.tipBox.w <= 14 && state.tipBox.h >= 6 && state.tipBox.h <= 12,
+    `arrowhead must stay small and undistorted, got ${state.tipBox.w}x${state.tipBox.h}px`,
+  );
   assert.match(state.borderAnimation, /workflow-border-counterclockwise/);
   assert.match(state.modelText, /Claude · haiku/);
   assert.match(state.modelText, /ChatGPT · gpt-5.4/);
