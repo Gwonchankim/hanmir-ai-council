@@ -125,9 +125,18 @@ function createPromptEvidenceCollector() {
     return ['orchestrator', 'claudeWorker', 'codexWorker'].map((role) => {
       const expectedMarkdown = roleToMarkdown(harnessSet[role]);
       const expectedDigest = digestText(expectedMarkdown);
-      const candidates = observations.filter((item) => item.cycle === cycle.number && item.role === role);
-      const matching = candidates.find((item) => item.prompt.includes(expectedMarkdown));
-      const selected = matching || candidates[0];
+      const roleCandidates = observations.filter((item) => item.role === role);
+      const parsedCycleCandidates = roleCandidates.filter((item) => item.cycle === cycle.number);
+      // cycle 귀속을 promptCycle 텍스트 파싱에만 맡기지 않는다. LLM이 설계한 하네스
+      // 본문에 "cycle-1" 같은 표현이 실제 anchor보다 먼저 나오면 첫-매칭 파싱이
+      // 관찰을 엉뚱한 cycle 버킷으로 보내, 전송 내용이 완벽히 일치하는 실행에서도
+      // 증거가 사라진다(실측: 비결정 게이트 실패의 원인). 이 cycle에 고정된 하네스
+      // markdown은 revision마다 내용이 달라지므로, "그 내용이 실제 전송 텍스트에
+      // 포함되었는가" 자체가 가장 강한 cycle 귀속이다. 판정은 여전히 관찰된 실제
+      // 프롬프트 텍스트만 근거로 삼는다(엔진의 자기 기록에 의존하지 않음).
+      const matching = parsedCycleCandidates.find((item) => item.prompt.includes(expectedMarkdown))
+        || roleCandidates.find((item) => item.prompt.includes(expectedMarkdown));
+      const selected = matching || parsedCycleCandidates[0];
       if (!selected && state) {
         const persisted = persistedPromptBinding(state, cycle, role, expectedMarkdown, expectedDigest);
         if (persisted) return persisted;
