@@ -1265,24 +1265,6 @@ textarea::placeholder { color: var(--color-smoke-gray); }
   animation: workflow-svg-flow 1.05s linear infinite;
 }
 .workflow-cycle-connector.is-idle .workflow-connector-flow { stroke: rgba(23,25,28,.27); }
-/* 화살촉: SVG 마커는 preserveAspectRatio="none"에 눌려 찌그러지므로 CSS 삼각형으로 그린다. */
-.workflow-connector-tip {
-  position: absolute;
-  bottom: 0;
-  z-index: 2;
-  width: 0;
-  height: 0;
-  border-right: 5px solid transparent;
-  border-left: 5px solid transparent;
-  border-top: 8px solid rgba(23,25,28,.34);
-  transform: translateX(-50%);
-  transition: border-top-color .24s ease;
-  pointer-events: none;
-}
-.workflow-cycle-connector.is-complete .workflow-connector-tip { border-top-color: rgba(23,25,28,.70); }
-.workflow-cycle-connector.is-active .workflow-connector-tip { border-top-color: var(--color-sienna-brown); }
-.workflow-cycle-connector.is-idle .workflow-connector-tip { border-top-color: rgba(23,25,28,.27); }
-.workflow-connector-mobile-tip { display: none; }
 .workflow-connector-mobile-path { display: none; }
 .workflow-cycle-connector.is-merge small { top: 49px; }
 @keyframes workflow-svg-flow { to { stroke-dashoffset: -50; } }
@@ -2055,8 +2037,6 @@ textarea::placeholder { color: var(--color-smoke-gray); }
   .workflow-cycle-connector.is-merge .workflow-connector-desktop-path { display: none; }
   .workflow-cycle-connector.is-split .workflow-connector-mobile-path,
   .workflow-cycle-connector.is-merge .workflow-connector-mobile-path { display: block; }
-  .workflow-cycle-connector.is-split .workflow-connector-desktop-tip { display: none; }
-  .workflow-cycle-connector.is-split .workflow-connector-mobile-tip { display: block; }
   .workflow-cycle-connector.is-merge small { top: 9px; }
   .workflow-cycle-node-head { grid-template-columns: auto minmax(0,1fr); }
   .workflow-cycle-badges { grid-column: 1 / -1; max-width: none; justify-content: flex-start; padding-left: 44px; }

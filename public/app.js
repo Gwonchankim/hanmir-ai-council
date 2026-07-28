@@ -1085,16 +1085,17 @@ function workflowConnector(label, state = 'idle', variant = 'linear') {
   svg.setAttribute('aria-hidden', 'true');
   // 수직 → 짧은 라운드 코너 → 수평 → 라운드 코너 → 수직.
   // 직각에 가깝게 꺾이되 모서리만 둥근 형태라 분기 방향이 한눈에 읽힌다.
-  const MOBILE_PATH = 'M 500 0 V 91';
+  // 화살촉 없이 선만으로 잇는다. 끝은 노드 경계까지 그대로 닿는다.
+  const MOBILE_PATH = 'M 500 0 V 100';
   const paths = variant === 'split'
     ? [
-      'M 500 0 V 26 Q 500 44, 466 44 H 284 Q 250 44, 250 62 V 91',
-      'M 500 0 V 26 Q 500 44, 534 44 H 716 Q 750 44, 750 62 V 91',
+      'M 500 0 V 26 Q 500 44, 466 44 H 284 Q 250 44, 250 62 V 100',
+      'M 500 0 V 26 Q 500 44, 534 44 H 716 Q 750 44, 750 62 V 100',
     ]
     : variant === 'merge'
       ? [
-        'M 250 0 V 26 Q 250 44, 284 44 H 466 Q 500 44, 500 62 V 91',
-        'M 750 0 V 26 Q 750 44, 716 44 H 534 Q 500 44, 500 62 V 91',
+        'M 250 0 V 26 Q 250 44, 284 44 H 466 Q 500 44, 500 62 V 100',
+        'M 750 0 V 26 Q 750 44, 716 44 H 534 Q 500 44, 500 62 V 100',
       ]
       : [MOBILE_PATH];
   const appendPathPair = (data, className) => {
@@ -1110,22 +1111,6 @@ function workflowConnector(label, state = 'idle', variant = 'linear') {
   paths.forEach((data) => appendPathPair(data, 'workflow-connector-desktop-path'));
   if (variant !== 'linear') appendPathPair(MOBILE_PATH, 'workflow-connector-mobile-path');
   connector.append(svg);
-  // 화살촉은 SVG 마커로 두면 preserveAspectRatio="none"의 비등방 스케일에 눌려
-  // 바늘처럼 찌그러진다. 경로 끝은 모두 수직으로 진입하므로 아래를 향하는
-  // CSS 삼각형으로 그려 어떤 폭에서도 같은 크기·비율을 유지한다.
-  const appendTip = (left, className) => {
-    const tip = document.createElement('span');
-    tip.className = `workflow-connector-tip ${className}`;
-    tip.style.left = left;
-    connector.append(tip);
-  };
-  if (variant === 'split') {
-    appendTip('25%', 'workflow-connector-desktop-tip');
-    appendTip('75%', 'workflow-connector-desktop-tip');
-    appendTip('50%', 'workflow-connector-mobile-tip');
-  } else {
-    appendTip('50%', 'workflow-connector-desktop-tip');
-  }
   const copy = document.createElement('small');
   copy.textContent = label;
   connector.append(copy);

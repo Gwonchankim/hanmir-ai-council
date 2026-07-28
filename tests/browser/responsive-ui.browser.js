@@ -533,16 +533,14 @@ async function verifyWorkflowVisualization(client) {
       splitConnectors: cycle.querySelectorAll('.workflow-cycle-connector.is-split').length,
       mergeConnectors: cycle.querySelectorAll('.workflow-cycle-connector.is-merge').length,
       splitPaths: cycle.querySelectorAll('.workflow-cycle-connector.is-split .workflow-connector-flow').length,
-      splitArrows: cycle.querySelectorAll('.workflow-cycle-connector.is-split .workflow-connector-desktop-tip').length,
       mergePaths: cycle.querySelectorAll('.workflow-cycle-connector.is-merge .workflow-connector-flow').length,
-      mergeArrow: cycle.querySelectorAll('.workflow-cycle-connector.is-merge .workflow-connector-desktop-tip').length,
-      // SVG 마커는 preserveAspectRatio="none"의 비등방 스케일에 눌려 바늘처럼 찌그러진다.
+      // 화살촉은 쓰지 않는다. SVG 마커는 preserveAspectRatio="none"의 비등방 스케일에
+      // 눌려 찌그러지고, CSS 삼각형은 선과 이음새가 떠 보였다. 선만으로 잇는다.
       svgMarkerArrows: cycle.querySelectorAll('.workflow-connector-flow[marker-end]').length,
-      tipBox: (() => {
-        const tip = cycle.querySelector('.workflow-cycle-connector.is-split .workflow-connector-desktop-tip');
-        const box = tip.getBoundingClientRect();
-        return { w: Math.round(box.width), h: Math.round(box.height) };
-      })(),
+      cssArrowTips: cycle.querySelectorAll('.workflow-connector-tip').length,
+      // 선이 노드 경계까지 닿아야 연결이 끊겨 보이지 않는다.
+      pathEndsAtNode: [...cycle.querySelectorAll('.workflow-connector-flow')]
+        .every((path) => /V 100$/.test(path.getAttribute('d'))),
       modelText: cycle.textContent,
       followLabel: document.querySelector('#workflowFollowLabel').textContent,
       followPressed: document.querySelector('#workflowFollow').getAttribute('aria-pressed'),
@@ -558,14 +556,10 @@ async function verifyWorkflowVisualization(client) {
   assert.equal(state.splitConnectors, 1, 'Orchestrator dispatch should render as an explicit split');
   assert.equal(state.mergeConnectors, 1, 'agent return should render as an explicit merge');
   assert.equal(state.splitPaths, 3, 'split connector needs smooth routes to both workers plus a mobile fallback');
-  assert.equal(state.splitArrows, 2, 'split connector needs one arrow per worker');
   assert.equal(state.mergePaths, 3, 'merge connector needs smooth routes from both workers plus a mobile fallback');
-  assert.equal(state.mergeArrow, 1, 'merge connector needs a single return arrow');
-  assert.equal(state.svgMarkerArrows, 0, 'arrowheads must not regress to distortion-prone SVG markers');
-  assert.ok(
-    state.tipBox.w >= 8 && state.tipBox.w <= 14 && state.tipBox.h >= 6 && state.tipBox.h <= 12,
-    `arrowhead must stay small and undistorted, got ${state.tipBox.w}x${state.tipBox.h}px`,
-  );
+  assert.equal(state.svgMarkerArrows, 0, 'connectors must not regress to distortion-prone SVG marker arrowheads');
+  assert.equal(state.cssArrowTips, 0, 'connectors are drawn as lines only, with no arrowhead');
+  assert.equal(state.pathEndsAtNode, true, 'connector lines must reach the node edge so the link never looks detached');
   assert.match(state.borderAnimation, /workflow-border-counterclockwise/);
   assert.match(state.modelText, /Claude · haiku/);
   assert.match(state.modelText, /ChatGPT · gpt-5.4/);
