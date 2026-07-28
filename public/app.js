@@ -570,6 +570,8 @@ const COUNCIL_ROLE_META = Object.freeze({
 });
 
 // 긴 산출물 본문(수천 px)은 접어두고 '더 읽기'로 펼친다. 짧은 본문은 그대로 둔다.
+// 25 cycle까지 허용되므로 한 세션에 수백 장이 쌓일 수 있다. 화면에 유지할 상한.
+const ARTIFACT_CARD_LIMIT = 120;
 const READ_MORE_LIMIT = 420;
 function applyReadMore(body, actions) {
   // rAF는 탭이 백그라운드/비표시 상태면 실행되지 않으므로 타이머를 쓴다.
@@ -3091,6 +3093,13 @@ function renderArtifact(event, kind, rawArtifact) {
   }
   card.append(header, actions, body);
   ui.artifactList.append(card);
+  // 메시지 패널과 달리 이 목록에는 상한이 없어 세션이 길어질수록 계속 쌓였다.
+  // 오래된 카드부터 덜어내되, 필터 안내 문단은 건드리지 않는다.
+  let cards = ui.artifactList.querySelectorAll('.artifact-card');
+  while (cards.length > ARTIFACT_CARD_LIMIT) {
+    cards[0].remove();
+    cards = ui.artifactList.querySelectorAll('.artifact-card');
+  }
   ui.artifactSection.classList.remove('hidden');
   updateCount('artifact');
   applyArtifactFilter();
@@ -3677,6 +3686,15 @@ function setMobileWorkspaceView(view, { focusPanel = false, persist = true } = {
     ui.inspectorPanel.removeAttribute('aria-hidden');
     ui.conversationPanel.inert = false;
     ui.inspectorPanel.inert = false;
+    // >880px에서는 탭바가 display:none이라 tablist가 존재하지 않는다. tabpanel
+    // 역할만 남으면 고아가 되고, aria-labelledby가 우선해 우측 패널이 "인사이트"로
+    // 읽힌다. 데스크톱에서는 역할을 걷어내고 원래 라벨을 되돌린다.
+    [ui.conversationPanel, ui.inspectorPanel, ui.sessionRail].forEach((panel) => {
+      if (!panel) return;
+      panel.removeAttribute('role');
+      panel.removeAttribute('aria-labelledby');
+      if (panel.dataset.desktopLabel) panel.setAttribute('aria-label', panel.dataset.desktopLabel);
+    });
     return;
   }
 
@@ -3686,6 +3704,14 @@ function setMobileWorkspaceView(view, { focusPanel = false, persist = true } = {
   const sessionsOpen = next === 'sessions';
   const chatOpen = next === 'chat';
   const insightsOpen = next === 'insights';
+  // 데스크톱에서 걷어낸 tab 역할을 되돌린다. 세션 레일은 탭 3개 중 유일하게
+  // 대응 tabpanel이 없어 aria-controls가 가리킬 곳이 없었다.
+  ui.conversationPanel?.setAttribute('role', 'tabpanel');
+  ui.conversationPanel?.setAttribute('aria-labelledby', 'mobileChatTab');
+  ui.inspectorPanel?.setAttribute('role', 'tabpanel');
+  ui.inspectorPanel?.setAttribute('aria-labelledby', 'mobileInsightsTab');
+  ui.sessionRail.setAttribute('role', 'tabpanel');
+  ui.sessionRail.setAttribute('aria-labelledby', 'mobileSessionsTab');
   ui.sessionRail.classList.toggle('is-expanded-mobile', sessionsOpen);
   ui.sessionRail.classList.remove('is-collapsed');
   ui.sessionRail.setAttribute('aria-hidden', String(!sessionsOpen));
