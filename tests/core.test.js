@@ -127,6 +127,7 @@ function synthesis(version, requiredQuestion = false, feedback = false) {
 function fakeBrain(options = {}) {
   const calls = [];
   let codexDraftFailures = 0;
+  let claudeCritiqueFailures = 0;
   const fn = async ({ prompt, session, schema, signal }) => {
     const kind = schema.$id;
     const author = prompt.includes("author는 반드시 'claude'") ? 'claude'
@@ -148,6 +149,14 @@ function fakeBrain(options = {}) {
     }
     if (kind === 'Draft' && author === 'claude' && options.failCodexDraftOnce) {
       await new Promise((resolve) => setTimeout(resolve, 1));
+    }
+    // Fails the claudeWorker's resumed critique call once with an error that
+    // is NOT fallback-eligible (no rate-limit/quota/etc keyword), so the
+    // stuck-session cleanup path in engine.js's catch block is exercised
+    // instead of the fallback path.
+    if (options.failClaudeCritiqueOnce && kind === 'Critique' && reviewer === 'claude'
+      && claudeCritiqueFailures++ === 0) {
+      throw new Error('claudeWorker critique process crashed unexpectedly');
     }
 
     let value;
@@ -266,6 +275,34 @@ test('실패한 병렬 단계는 완료 결과를 보존하고 실패 역할만 
   assert.equal(store.get().phase, 'awaiting_approval');
   assert.equal(brain.calls.filter((call) => call.kind === 'Draft' && call.key === 'claude').length, 1);
   assert.equal(brain.calls.filter((call) => call.kind === 'Draft' && call.key === 'codex').length, 2);
+});
+
+test('resume에 쓰인 세션이 폴백 불가 오류로 실패하면 재시도는 새 세션으로 시작한다', async (t) => {
+  const store = fixtureStore(t);
+  const brain = fakeBrain({ failClaudeCritiqueOnce: true });
+  const engine = new PlanningEngine({ store, brainCaller: brain });
+  await engine.runPlanning('세션 폐기 회귀 테스트').promise;
+
+  assert.equal(store.get().phase, 'failed');
+  assert.ok(store.currentCycle().artifacts.claudeDraft);
+  assert.equal(store.currentCycle().artifacts.claudeCritique, undefined);
+
+  // The Draft call resumed with no prior session and set both the
+  // route-scoped and legacy session fields for claudeWorker. The failed
+  // Critique resume attempt (a non-fallback-eligible error) must discard
+  // that stuck session ID -- otherwise retry() would resume with the same
+  // bad ID and repeat the exact same failure forever.
+  const primaryRouteKey = 'claude:sonnet:medium';
+  assert.equal(store.get().routeSessions.claudeWorker?.[primaryRouteKey], undefined);
+  assert.equal(store.get().sessions.claudeWorker, null);
+
+  await engine.retry().promise;
+  assert.equal(store.get().phase, 'awaiting_approval');
+
+  const claudeCritiqueCalls = brain.calls.filter((call) => call.kind === 'Critique' && call.key === 'claude');
+  assert.equal(claudeCritiqueCalls.length, 2);
+  assert.equal(claudeCritiqueCalls[0].resumed, true);
+  assert.equal(claudeCritiqueCalls[1].resumed, false);
 });
 
 test('retry는 저장된 checkpoint를 재검증하고 변조된 worker artifact부터 재생성한다', async (t) => {

@@ -23,6 +23,7 @@ const ui = {
   connectionBadge: byId('connectionBadge'),
   remoteModeBadge: byId('remoteModeBadge'),
   phasePill: byId('phasePill'),
+  phaseElapsed: byId('phaseElapsed'),
   roundValue: byId('roundValue'),
   cycleValue: byId('cycleValue'),
   planVersionValue: byId('planVersionValue'),
@@ -186,6 +187,37 @@ const PHASE_LABELS = {
   cancelled: '취소됨',
 };
 
+// 진행률 표시용 단계 순서. LLM 호출이 수십 초~수 분 걸리므로, 사용자가
+// "지금 몇 번째 단계인지"를 알 수 있어야 화면이 멈춘 것과 구분된다.
+const PHASE_SEQUENCE = {
+  planning: [
+    ['harnessing'],
+    ['decomposing', 'dispatching', 'dispatch'],
+    ['r0_drafting', 'drafting', 'r0'],
+    ['r1_critiquing', 'critiquing', 'r1'],
+    ['r2_revising', 'revising', 'r2'],
+    ['synthesizing', 'synthesis'],
+  ],
+  decision_council: [
+    ['framing'],
+    ['independent_analysis'],
+    ['anonymous_peer_review'],
+    ['chair_synthesis'],
+  ],
+};
+
+function phaseProgress(phase, mode) {
+  const steps = PHASE_SEQUENCE[mode === 'decision_council' ? 'decision_council' : 'planning'];
+  const index = steps.findIndex((group) => group.includes(phase));
+  return index < 0 ? null : { step: index + 1, total: steps.length };
+}
+
+function formatElapsed(ms) {
+  const seconds = Math.max(0, Math.round(ms / 1000));
+  if (seconds < 60) return `${seconds}초`;
+  return `${Math.floor(seconds / 60)}분 ${String(seconds % 60).padStart(2, '0')}초`;
+}
+
 const BUSY_PHASES = new Set([
   'decomposing', 'dispatch', 'dispatching', 'harnessing', 'r0_drafting', 'drafting', 'r0',
   'r1_critiquing', 'critiquing', 'r1', 'r2_revising', 'revising', 'r2',
@@ -255,6 +287,11 @@ const app = {
   workflowReplay: false,
   workflowRoleState: { orchestrator: 'idle', claude: 'idle', codex: 'idle', return: 'idle' },
   workflowEvents: [],
+  // 사용자가 직접 펼치거나 접은 Cycle만 기억한다(cycle 번호 → open 여부).
+  workflowCycleOverrides: new Map(),
+  artifactFilterTouched: false,
+  phaseStartedAt: null,
+  phaseTimer: null,
   renderedArtifacts: new Set(),
   counts: { user: 0, orchestrator: 0, claude: 0, codex: 0, artifact: 0 },
   councilRoleControls: {},
@@ -1342,8 +1379,17 @@ function renderWorkflowCycles() {
     const detail = document.createElement('details');
     detail.className = 'workflow-cycle';
     detail.dataset.cycle = String(cycleNumber);
-    detail.open = cycleNumber === currentCycle;
+    // 이 함수는 이벤트가 올 때마다 트리를 새로 만든다. 사용자가 직접 펼친 과거 Cycle은
+    // 그 선택을 유지해야 읽던 내용이 사라지지 않는다. 다만 "현재 Cycle이라 자동으로
+    // 열렸던 것"까지 기억하면 과거 Cycle이 영영 접히지 않으므로, 사용자가 직접 토글한
+    // 것만 override로 남긴다.
+    const override = app.workflowCycleOverrides.get(cycleNumber);
+    detail.open = override === undefined ? cycleNumber === currentCycle : override;
     const summary = document.createElement('summary');
+    // click은 사용자 조작에서만 발생한다(open 속성 대입은 click을 만들지 않는다).
+    summary.addEventListener('click', () => {
+      app.workflowCycleOverrides.set(cycleNumber, !detail.open);
+    });
     summary.innerHTML = `<span>Cycle ${cycleNumber}</span><strong>${escapeHtml(PHASE_LABELS[phase] || phase)}</strong><small>${events.length} events</small>`;
     const body = document.createElement('div');
     body.className = `workflow-cycle-body mode-${mode}`;
@@ -1371,11 +1417,25 @@ function renderWorkflowCycles() {
   renderWorkflowMetrics();
 }
 
+// renderWorkflowCycles는 모든 Cycle의 노드 트리를 통째로 다시 만든다.
+// setPhase와 recordWorkflowEvent가 이벤트 하나마다 각각 호출하므로, 배칭하지 않으면
+// 같은 틱에 두 번 이상 전체 재구축이 일어난다. 한 틱에 한 번으로 모은다.
+// (rAF는 탭이 백그라운드일 때 멈추므로 setTimeout을 쓴다.)
+let workflowRenderQueued = false;
+function scheduleWorkflowRender() {
+  if (workflowRenderQueued) return;
+  workflowRenderQueued = true;
+  setTimeout(() => {
+    workflowRenderQueued = false;
+    renderWorkflowCycles();
+  }, 0);
+}
+
 function recordWorkflowEvent(event) {
   if (!event || typeof event !== 'object') return;
   app.workflowEvents.push(event);
   app.workflowEvents = app.workflowEvents.slice(-1000);
-  renderWorkflowCycles();
+  scheduleWorkflowRender();
 }
 
 function workflowNodeState(element, state) {
@@ -1438,7 +1498,7 @@ function workflowPhaseMessage(phase, target) {
 function syncWorkflowPhase(value, immediate = false) {
   const phase = normalizePhase(value);
   if (!app.workflowReplay) {
-    renderWorkflowCycles();
+    scheduleWorkflowRender();
     followWorkflowTarget(phase, immediate);
   }
   return;
@@ -1489,14 +1549,47 @@ function syncWorkflowPhase(value, immediate = false) {
 }
 
 function setPhase(value) {
+  const previous = app.phase;
   app.phase = normalizePhase(value);
   ui.phasePill.dataset.phase = app.phase;
   ui.phasePill.textContent = PHASE_LABELS[app.phase] || app.phase;
   const busy = BUSY_PHASES.has(app.phase);
   ui.workspace.removeAttribute('aria-busy');
   ui.ticker.closest('.activity-panel')?.setAttribute('aria-busy', busy ? 'true' : 'false');
+  if (app.phase !== previous) app.phaseStartedAt = Date.now();
+  syncPhaseClock(busy);
   syncWorkflowPhase(app.phase);
+  syncArtifactFilterToPhase();
   updateControls();
+}
+
+// 대기 중 유일하게 "변하는 것"을 만든다. 회전 애니메이션은 prefers-reduced-motion에서
+// 꺼지므로, 축소 모션 사용자에게는 이 텍스트가 유일한 진행 신호가 된다.
+function renderPhaseClock() {
+  if (!ui.phaseElapsed) return;
+  const progress = phaseProgress(app.phase, app.state?.config?.mode);
+  const elapsed = app.phaseStartedAt ? formatElapsed(Date.now() - app.phaseStartedAt) : '';
+  const parts = [];
+  if (progress) parts.push(`단계 ${progress.step}/${progress.total}`);
+  if (elapsed) parts.push(elapsed);
+  ui.phaseElapsed.textContent = parts.join(' · ');
+  ui.phaseElapsed.hidden = !parts.length;
+}
+
+function syncPhaseClock(busy) {
+  if (app.phaseTimer) {
+    clearInterval(app.phaseTimer);
+    app.phaseTimer = null;
+  }
+  if (!busy) {
+    if (ui.phaseElapsed) {
+      ui.phaseElapsed.textContent = '';
+      ui.phaseElapsed.hidden = true;
+    }
+    return;
+  }
+  renderPhaseClock();
+  app.phaseTimer = setInterval(renderPhaseClock, 1000);
 }
 
 function updateMeta(source = {}) {
@@ -2965,12 +3058,49 @@ function renderArtifact(event, kind, rawArtifact) {
 
 function applyArtifactFilter() {
   const filter = ui.artifactFilter?.value || 'final';
-  [...ui.artifactList.children].forEach((card) => {
+  const cards = [...ui.artifactList.children].filter((el) => el.classList.contains('artifact-card'));
+  let visibleCount = 0;
+  cards.forEach((card) => {
     const visible = filter === 'all'
       || (filter === 'current' && Number(card.dataset.cycle) === Number(app.cycle))
       || (filter === 'final' && card.dataset.finalArtifact === 'true');
     card.classList.toggle('hidden', !visible);
+    if (visible) visibleCount += 1;
   });
+  // 헤더 카운트가 전체 개수만 보여주면 필터에 가려진 산출물이 없는 것처럼 읽힌다.
+  if (ui.artifactCount) {
+    ui.artifactCount.textContent = visibleCount === cards.length
+      ? String(cards.length)
+      : `${visibleCount} / ${cards.length}`;
+  }
+  // 필터 결과가 비었을 때 안내가 없으면 "결과가 사라졌다"로 오인된다.
+  let empty = ui.artifactList.querySelector('.artifact-filter-empty');
+  if (!visibleCount && cards.length) {
+    if (!empty) {
+      empty = document.createElement('p');
+      empty.className = 'empty-state artifact-filter-empty';
+      ui.artifactList.append(empty);
+    }
+    empty.textContent = filter === 'final'
+      ? `아직 최종 결과가 없습니다. 진행 중인 초안·검토 ${cards.length}건을 보려면 표시 범위를 '현재 Cycle'이나 '전체 기록'으로 바꾸세요.`
+      : '현재 표시 범위에 해당하는 산출물이 없습니다.';
+    empty.classList.remove('hidden');
+  } else if (empty) {
+    empty.classList.add('hidden');
+  }
+}
+
+// 실행 중에는 최종 결과가 아직 없다. 사용자가 직접 고른 적이 없다면 진행 중 산출물이
+// 보이는 범위로 옮긴다. (기본값 'final'이면 drafting 내내 빈 화면만 보인다)
+function syncArtifactFilterToPhase() {
+  if (!ui.artifactFilter || app.artifactFilterTouched) return;
+  const busy = BUSY_PHASES.has(app.phase);
+  const next = busy ? 'current' : 'final';
+  if (ui.artifactFilter.value === next) return;
+  if (busy || ui.artifactFilter.value === 'current') {
+    ui.artifactFilter.value = next;
+    applyArtifactFilter();
+  }
 }
 
 function addActivity(event, text) {
@@ -3876,7 +4006,11 @@ ui.applyRecommended?.addEventListener('click', () => {
   updateConfigSummary();
   setTicker('최신 모델 기준의 권장 라우팅을 적용했습니다.');
 });
-ui.artifactFilter?.addEventListener('change', applyArtifactFilter);
+ui.artifactFilter?.addEventListener('change', () => {
+  // 사용자가 직접 고른 범위는 단계 전환이 덮어쓰지 않는다.
+  app.artifactFilterTouched = true;
+  applyArtifactFilter();
+});
 ui.closeArtifactReader?.addEventListener('click', () => {
   if (typeof ui.artifactReader.close === 'function') ui.artifactReader.close();
   else ui.artifactReader.removeAttribute('open');

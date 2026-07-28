@@ -167,7 +167,17 @@ class PlanningEngine {
           break;
         } catch (error) {
           const hasNext = routeIndex + 1 < routes.length;
-          if (!hasNext || !isFallbackEligible(error)) throw error;
+          if (!hasNext || !isFallbackEligible(error)) {
+            // resume에 쓴 세션 ID 자체가 실패 원인일 수 있다(CLI 측 만료, 과거의
+            // 교차-brain 오염 등). 그대로 두면 retry가 같은 ID로 같은 오류를
+            // 무한히 반복하므로, 다음 시도가 새 세션으로 시작하도록 폐기한다.
+            if (previousSession) {
+              delete state.routeSessions[roleKey][sessionKey];
+              if (state.sessions[roleKey] === previousSession) state.sessions[roleKey] = null;
+              this.store.touch();
+            }
+            throw error;
+          }
           const classification = classifyFallbackError(error);
           const openedCircuit = this.store.openRouteCircuit(candidate, classification);
           fallbackFrom = candidate;
@@ -207,7 +217,10 @@ class PlanningEngine {
       });
       this.store.closeRouteCircuit(activeRoute);
       state.routeSessions[roleKey][routeKey(activeRoute)] = result.session;
-      state.sessions[roleKey] = result.session;
+      // legacy 필드에는 brain 정보가 없다. fallback 경로(routeIndex > 0)의 세션 ID를
+      // 여기 넣으면, 서킷이 풀린 뒤 주 경로로 돌아온 호출이 다른 brain의 세션 ID로
+      // resume을 시도해 실패한다. 주 경로로 성공했을 때만 갱신한다.
+      if (activeRouteIndex === 0) state.sessions[roleKey] = result.session;
       latestText = result.text;
 
       try {

@@ -424,6 +424,18 @@ button { color: inherit; }
 
 .connection-badge,
 .remote-mode-badge,
+/* 실행 중 경과 시간·단계 진행률. 대기 화면에서 유일하게 변하는 텍스트라
+   축소 모션 환경에서도 진행 여부를 판단할 수 있다. */
+.phase-elapsed {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 8px;
+  color: var(--color-slate-gray);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.phase-elapsed[hidden] { display: none; }
 .phase-pill,
 .message-count,
 .question-summary {
@@ -2109,6 +2121,12 @@ textarea::placeholder { color: var(--color-smoke-gray); }
     scroll-behavior: auto !important;
     transition: none !important;
     animation: none !important;
+  }
+  /* 회전 애니메이션이 꺼지면 활성 노드를 구분할 신호가 사라진다.
+     정적 테두리로 "지금 이 단계"를 대신 표시한다. */
+  .workflow-cycle-node.is-active {
+    outline: 2px solid var(--color-sienna-brown);
+    outline-offset: 2px;
   }
 }
 
