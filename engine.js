@@ -101,6 +101,9 @@ class PlanningEngine {
       // 아래 라우트 루프는 매 시도마다 이 원본 기준으로 다시 잘라내므로
       // 누적 치환이 발생하지 않는다.
       const harnessBlockMatch = harnessDigest ? callPrompt.match(HARNESS_BLOCK_RE) : null;
+      // 전달 캐시의 cycle 키. context.cycle은 일부 호출(draft/critique 등)에서
+      // 비어 있으므로 엔진의 현재 cycle을 단일 기준으로 삼는다.
+      const harnessCycleNumber = this.store.currentCycle()?.number ?? null;
       let result = null;
       let activeRoute = null;
       let activeRouteIndex = preferredRouteIndex;
@@ -139,13 +142,15 @@ class PlanningEngine {
         state.routeSessions[roleKey] ||= {};
         previousSession = state.routeSessions[roleKey][sessionKey]
           || (routeIndex === 0 ? state.sessions[roleKey] : null);
-        // 이 라우트가 실제로 재개할 CLI 세션이 지금 하네스 digest를 이미
+        // 이 라우트가 실제로 재개할 CLI 세션이 이번 cycle에 하네스 digest를 이미
         // 받았다면 전문 대신 짧은 참조문으로 치환한다. 새 세션·fork·복구는
         // previousSession이 다르거나 없으므로 자동으로 전문을 다시 보낸다.
+        // cycle 경계에서는 항상 전문을 다시 보내 증거 게이트가 요구하는
+        // digest 증거를 역할마다 한 건씩 남긴다.
         let routePrompt = callPrompt;
         let routeIncludedHarness = sentPromptIncludedHarness;
         if (harnessBlockMatch && previousSession
-          && this.store.hasHarnessDelivery(previousSession, harnessDigest)) {
+          && this.store.hasHarnessDelivery(previousSession, harnessDigest, harnessCycleNumber)) {
           routePrompt = callPrompt.slice(0, harnessBlockMatch.index)
             + prompts.harnessReference(roleKey)
             + callPrompt.slice(harnessBlockMatch.index + harnessBlockMatch[0].length);
@@ -238,7 +243,7 @@ class PlanningEngine {
         // 다음 호출부터 이 세션은 짧은 참조문만 받도록 캐시한다. 실패한
         // 호출(아래에서 재시도)이 이 세션을 폐기하면 캐시 항목은 자동으로
         // 무의미해진다(새 세션 ID는 캐시에 없으므로 다시 전문이 전달된다).
-        this.store.recordHarnessDelivery(result.session, harnessDigest, roleKey);
+        this.store.recordHarnessDelivery(result.session, harnessDigest, roleKey, harnessCycleNumber);
       }
       this.store.recordSessionInvocation({
         role: roleKey,

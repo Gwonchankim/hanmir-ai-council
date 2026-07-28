@@ -169,33 +169,37 @@ test('harness delivery cache tracks per-session digests, survives restart, and e
   const digestA = 'a'.repeat(64);
   const digestB = 'b'.repeat(64);
 
-  assert.equal(store.hasHarnessDelivery('session-1', digestA), false);
-  store.recordHarnessDelivery('session-1', digestA, 'claudeWorker');
-  assert.equal(store.hasHarnessDelivery('session-1', digestA), true);
+  assert.equal(store.hasHarnessDelivery('session-1', digestA, 1), false);
+  store.recordHarnessDelivery('session-1', digestA, 'claudeWorker', 1);
+  assert.equal(store.hasHarnessDelivery('session-1', digestA, 1), true);
   // A different digest for the same session (harness revision changed) is a
   // miss -- the caller must resend the full harness.
-  assert.equal(store.hasHarnessDelivery('session-1', digestB), false);
+  assert.equal(store.hasHarnessDelivery('session-1', digestB, 1), false);
   // A different session id for the same digest (new session/fork/recovery)
   // is also a miss.
-  assert.equal(store.hasHarnessDelivery('session-2', digestA), false);
+  assert.equal(store.hasHarnessDelivery('session-2', digestA, 1), false);
+  // A new cycle is a miss even for the same session and digest: the evidence
+  // gate requires one full-harness prompt per role per cycle, so the cache
+  // must not span cycle boundaries.
+  assert.equal(store.hasHarnessDelivery('session-1', digestA, 2), false);
   // Missing arguments never produce a false "hit".
-  assert.equal(store.hasHarnessDelivery(null, digestA), false);
-  assert.equal(store.hasHarnessDelivery('session-1', null), false);
+  assert.equal(store.hasHarnessDelivery(null, digestA, 1), false);
+  assert.equal(store.hasHarnessDelivery('session-1', null, 1), false);
   store.snapshot();
 
   const restarted = new StateStore({ snapshotPath, autoLoad: true });
-  assert.equal(restarted.hasHarnessDelivery('session-1', digestA), true);
+  assert.equal(restarted.hasHarnessDelivery('session-1', digestA, 1), true);
 
   // Bounded cache: once more than HARNESS_DELIVERY_MAX_ENTRIES (64) distinct
   // sessions have been recorded, the oldest entries are pruned so a
   // long-running conversation cannot grow this map without bound.
   for (let i = 0; i < 80; i += 1) {
-    restarted.recordHarnessDelivery(`bulk-session-${i}`, digestA, 'claudeWorker');
+    restarted.recordHarnessDelivery(`bulk-session-${i}`, digestA, 'claudeWorker', 1);
   }
   const keys = Object.keys(restarted.get().harnessDelivery);
   assert.ok(keys.length <= 64);
-  assert.equal(restarted.hasHarnessDelivery('bulk-session-79', digestA), true);
-  assert.equal(restarted.hasHarnessDelivery('bulk-session-0', digestA), false);
+  assert.equal(restarted.hasHarnessDelivery('bulk-session-79', digestA, 1), true);
+  assert.equal(restarted.hasHarnessDelivery('bulk-session-0', digestA, 1), false);
 });
 
 test('activate validates snapshot identity before commit and rolls back on mismatch', (t) => {

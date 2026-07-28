@@ -399,6 +399,9 @@ class StateStore {
               && /^[a-f0-9]{64}$/i.test(String(value.harnessDigest || '')))
             .map(([key, value]) => [key, {
               harnessDigest: String(value.harnessDigest).toLowerCase(),
+              // cycle까지 복원해야 재시작 후에도 "이번 cycle에 이미 전달했다"를
+              // 판단할 수 있다. 빠뜨리면 캐시가 항상 미스가 된다.
+              cycle: Number.isFinite(Number(value.cycle)) ? Number(value.cycle) : null,
               role: typeof value.role === 'string' ? value.role : null,
               at: typeof value.at === 'string' ? value.at : now(),
             }])
@@ -1281,16 +1284,22 @@ class StateStore {
 
   // 특정 CLI 세션이 주어진 하네스 digest를 이미 전달받았는지 확인한다.
   // 세션 ID 자체가 키이므로 새 세션·fork·복구는 자동으로 미스가 된다.
-  hasHarnessDelivery(sessionId, harnessDigest) {
+  // cycle을 키에 포함한다. 증거 게이트(CF_HARNESS_PROTOCOL)는 각 cycle에서 역할마다
+  // "프롬프트에 하네스 전문이 실렸다"는 digest 증거를 최소 한 건 요구한다. 세션과
+  // digest만으로 캐시하면 이어지는 cycle의 모든 호출이 캐시 히트가 되어 그 증거가
+  // 한 건도 남지 않는다. cycle마다 첫 호출은 전문을 보내고 이후만 참조로 줄인다.
+  hasHarnessDelivery(sessionId, harnessDigest, cycle = null) {
     if (!sessionId || !harnessDigest) return false;
     const record = this.state.harnessDelivery?.[sessionId];
-    return Boolean(record && record.harnessDigest === harnessDigest);
+    return Boolean(record
+      && record.harnessDigest === harnessDigest
+      && Number(record.cycle) === Number(cycle));
   }
 
-  recordHarnessDelivery(sessionId, harnessDigest, role = null) {
+  recordHarnessDelivery(sessionId, harnessDigest, role = null, cycle = null) {
     if (!sessionId || !harnessDigest) return;
     this.state.harnessDelivery ||= {};
-    this.state.harnessDelivery[sessionId] = { harnessDigest, role, at: now() };
+    this.state.harnessDelivery[sessionId] = { harnessDigest, cycle: Number(cycle), role, at: now() };
     const keys = Object.keys(this.state.harnessDelivery);
     if (keys.length > HARNESS_DELIVERY_MAX_ENTRIES) {
       const oldestFirst = keys.sort((a, b) => (
