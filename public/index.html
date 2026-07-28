@@ -392,8 +392,8 @@
             <section id="artifactSection" class="artifact-section hidden" aria-labelledby="artifactTitle">
               <div class="section-heading artifact-heading">
                 <div>
-                  <p class="eyebrow">Validated output</p>
-                  <h2 id="artifactTitle">구조화 산출물</h2>
+                  <p class="eyebrow">Decision output</p>
+                  <h2 id="artifactTitle">결과 검토</h2>
                 </div>
                 <div class="artifact-tools">
                   <label for="artifactFilter" class="sr-only">산출물 표시 범위</label>
@@ -569,6 +569,26 @@
       </div>
     </div>
   </div>
+
+  <dialog id="artifactReader" class="artifact-reader" aria-labelledby="artifactReaderTitle">
+    <article class="artifact-reader-shell">
+      <header class="artifact-reader-head">
+        <div>
+          <p id="artifactReaderType" class="eyebrow">Result reader</p>
+          <h2 id="artifactReaderTitle">결과 읽기</h2>
+          <p id="artifactReaderMeta" class="artifact-reader-meta"></p>
+        </div>
+        <button id="closeArtifactReader" class="button ghost compact" type="button">닫기</button>
+      </header>
+      <div id="artifactReaderProvenance" class="artifact-provenance artifact-reader-provenance" aria-label="산출물 출처"></div>
+      <div id="artifactReaderBody" class="artifact-reader-body"></div>
+      <details class="artifact-raw">
+        <summary>원문 구조 보기</summary>
+        <p class="helper-text">검증·감사용 내부 구조입니다. 업무 결과 검토에는 위 요약을 사용하세요.</p>
+        <div id="artifactReaderRaw" class="artifact-raw-body"></div>
+      </details>
+    </article>
+  </dialog>
 
   <script src="/app.js" defer></script>
 </body>

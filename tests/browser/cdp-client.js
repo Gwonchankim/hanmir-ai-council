@@ -179,8 +179,27 @@ class CdpClient {
   }
 }
 
+// 설치된 브라우저를 순서대로 시도한다. 일부 환경의 Edge는 --headless=new에서
+// 디버깅 포트를 열지 못하고 즉시 종료되므로, 첫 후보 실패 시 다음 후보로 넘어간다.
 async function launchBrowser() {
-  const executable = findBrowserExecutable();
+  const candidates = browserCandidates().filter((candidate) => candidate && fs.existsSync(candidate));
+  if (!candidates.length) {
+    const error = new Error('Chromium browser not found. Set AI_COUNCIL_BROWSER to msedge.exe or chrome.exe.');
+    error.code = 'BROWSER_NOT_FOUND';
+    throw error;
+  }
+  let lastError;
+  for (const candidate of candidates) {
+    try {
+      return await launchBrowserWith(candidate);
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError;
+}
+
+async function launchBrowserWith(executable) {
   const port = await freePort();
   const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-council-browser-'));
   const child = spawn(executable, [
@@ -220,7 +239,11 @@ async function launchBrowser() {
     await client.send('Network.setCacheDisabled', { cacheDisabled: true });
   } catch (error) {
     child.kill();
-    fs.rmSync(userDataDir, { recursive: true, force: true });
+    // Windows는 kill 직후에도 브라우저가 프로필 핸들을 잡고 있어 즉시 삭제하면 EPERM이 난다.
+    // 정리 실패가 원래 실패 원인을 덮지 않도록 재시도 후 조용히 포기한다.
+    try {
+      fs.rmSync(userDataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    } catch (_) { /* 임시 프로필은 OS 정리에 맡긴다 */ }
     throw error;
   }
 

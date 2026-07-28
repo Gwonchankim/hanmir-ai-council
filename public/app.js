@@ -90,6 +90,14 @@ const ui = {
   artifactList: byId('artifactList'),
   artifactFilter: byId('artifactFilter'),
   artifactCount: byId('artifactCount'),
+  artifactReader: byId('artifactReader'),
+  artifactReaderType: byId('artifactReaderType'),
+  artifactReaderTitle: byId('artifactReaderTitle'),
+  artifactReaderMeta: byId('artifactReaderMeta'),
+  artifactReaderProvenance: byId('artifactReaderProvenance'),
+  artifactReaderBody: byId('artifactReaderBody'),
+  artifactReaderRaw: byId('artifactReaderRaw'),
+  closeArtifactReader: byId('closeArtifactReader'),
   inspectorPanel: byId('inspectorPanel'),
   expandAllInspector: byId('expandAllInspector'),
   orchestratorSummary: byId('orchestratorSummary'),
@@ -510,11 +518,40 @@ const COUNCIL_ROLE_META = Object.freeze({
   },
 });
 
+// 긴 산출물 본문(수천 px)은 접어두고 '더 읽기'로 펼친다. 짧은 본문은 그대로 둔다.
+const READ_MORE_LIMIT = 420;
+function applyReadMore(body, actions) {
+  // rAF는 탭이 백그라운드/비표시 상태면 실행되지 않으므로 타이머를 쓴다.
+  setTimeout(() => {
+    if (!body.isConnected || body.scrollHeight <= READ_MORE_LIMIT * 1.2) return;
+    body.classList.add('is-clamped');
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'artifact-more';
+    const sync = () => {
+      const clamped = body.classList.contains('is-clamped');
+      btn.textContent = clamped ? '더 읽기 ↓' : '접기 ↑';
+      btn.setAttribute('aria-expanded', String(!clamped));
+    };
+    btn.addEventListener('click', () => { body.classList.toggle('is-clamped'); sync(); });
+    sync();
+    (actions && actions.isConnected ? actions.parentNode : body.parentNode)
+      ?.insertBefore(btn, body.nextSibling);
+  }, 0);
+}
+
 function createSelect(className, labelText) {
   const label = document.createElement('label');
   label.textContent = labelText;
   const select = document.createElement('select');
   select.className = className;
+  // 좁은 카드에서 옵션 텍스트가 잘려도 hover로 전체 모델명을 확인할 수 있게 한다.
+  const syncTitle = () => {
+    const opt = select.options[select.selectedIndex];
+    select.title = opt ? opt.textContent : '';
+  };
+  select.addEventListener('change', syncTitle);
+  queueMicrotask(syncTitle);
   label.append(select);
   return { label, select };
 }
@@ -1034,9 +1071,54 @@ function createWorkflowCycleNode({
   return node;
 }
 
-function workflowConnector(label, flowing = false) {
+function workflowConnector(label, state = 'idle', variant = 'linear') {
   const connector = document.createElement('div');
-  connector.className = `workflow-cycle-connector${flowing ? ' is-flowing' : ''}`;
+  const normalizedState = ['active', 'complete', 'idle'].includes(state) ? state : 'idle';
+  connector.className = `workflow-cycle-connector is-${variant} is-${normalizedState}${normalizedState === 'active' ? ' is-flowing' : ''}`;
+  connector.dataset.workflowConnector = variant;
+  connector.dataset.workflowState = normalizedState;
+  const namespace = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(namespace, 'svg');
+  const connectorId = `workflow-connector-arrow-${Math.random().toString(36).slice(2)}`;
+  svg.classList.add('workflow-connector-svg');
+  svg.setAttribute('viewBox', '0 0 1000 100');
+  svg.setAttribute('preserveAspectRatio', 'none');
+  svg.setAttribute('aria-hidden', 'true');
+  const defs = document.createElementNS(namespace, 'defs');
+  const marker = document.createElementNS(namespace, 'marker');
+  marker.setAttribute('id', connectorId);
+  marker.setAttribute('markerWidth', '10');
+  marker.setAttribute('markerHeight', '10');
+  marker.setAttribute('refX', '8');
+  marker.setAttribute('refY', '5');
+  marker.setAttribute('orient', 'auto');
+  const arrow = document.createElementNS(namespace, 'path');
+  arrow.setAttribute('d', 'M 1 1 L 9 5 L 1 9 z');
+  arrow.setAttribute('fill', 'context-stroke');
+  marker.append(arrow);
+  defs.append(marker);
+  svg.append(defs);
+  const paths = variant === 'split'
+    ? ['M 500 0 C 500 42, 250 46, 250 100', 'M 500 0 C 500 42, 750 46, 750 100']
+    : variant === 'merge'
+      ? ['M 250 0 C 250 54, 500 58, 500 100', 'M 750 0 C 750 54, 500 58, 500 100']
+      : ['M 500 0 C 500 28, 500 72, 500 100'];
+  const appendPathPair = (data, className, hasArrow = true) => {
+    const track = document.createElementNS(namespace, 'path');
+    track.classList.add('workflow-connector-track', className);
+    track.setAttribute('d', data);
+    svg.append(track);
+    const flow = document.createElementNS(namespace, 'path');
+    flow.classList.add('workflow-connector-flow', className);
+    flow.setAttribute('d', data);
+    if (hasArrow) flow.setAttribute('marker-end', `url(#${connectorId})`);
+    svg.append(flow);
+  };
+  paths.forEach((data, index) => appendPathPair(data, 'workflow-connector-desktop-path', variant !== 'merge' || index === paths.length - 1));
+  if (variant !== 'linear') {
+    appendPathPair('M 500 0 C 500 28, 500 72, 500 100', 'workflow-connector-mobile-path');
+  }
+  connector.append(svg);
   const copy = document.createElement('small');
   copy.textContent = label;
   connector.append(copy);
@@ -1061,7 +1143,11 @@ function renderDecisionCycleBody(container, events, phase) {
     state: frameComplete ? 'complete' : phase === 'framing' ? 'active' : 'idle',
     accent: 'orchestrator-accent',
   }));
-  container.append(workflowConnector('동일한 질문을 5개 관점에 전달', phase === 'independent_analysis'));
+  container.append(workflowConnector(
+    '동일한 질문을 5개 관점에 전달',
+    phase === 'independent_analysis' ? 'active' : frameComplete ? 'complete' : 'idle',
+    'split',
+  ));
 
   const advisorGrid = document.createElement('div');
   advisorGrid.className = 'workflow-advisor-grid';
@@ -1096,7 +1182,11 @@ function renderDecisionCycleBody(container, events, phase) {
   progress.className = 'workflow-progress-strip';
   progress.innerHTML = `<span>독립 분석 <strong>${analysisCount}/5</strong></span><span>익명 평가 <strong>${reviewCount}/5</strong></span>`;
   container.append(progress, advisorGrid);
-  container.append(workflowConnector('익명 평가 결과를 Chair에게 전달', phase === 'anonymous_peer_review' || phase === 'chair_synthesis'));
+  container.append(workflowConnector(
+    '익명 평가 결과를 Chair에게 전달',
+    phase === 'anonymous_peer_review' || phase === 'chair_synthesis' ? 'active' : reviewCount === 5 ? 'complete' : 'idle',
+    'merge',
+  ));
 
   const chairEvents = events.filter((event) => (
     event.logicalRole === 'councilChair'
@@ -1128,16 +1218,22 @@ function renderPlanningCycleBody(container, events, phase) {
   ));
   const agentBusy = WORKFLOW_AGENT_PHASES.has(phase);
   const returning = WORKFLOW_RETURN_PHASES.has(phase);
+  const synthesisDone = finalEvents.some((event) => workflowArtifactType(event) === 'synthesis');
+  const workersStarted = ['claude', 'codex'].some((role) => workerEvents(role).length > 0);
   container.append(createWorkflowCycleNode({
     key: 'orchestrator',
     label: 'Orchestrator',
     caption: 'Harness · 과업 배분',
     glyph: 'O',
     events: topEvents,
-    state: agentBusy || returning ? 'complete' : WORKFLOW_TOP_PHASES.has(phase) ? 'active' : 'idle',
+    state: agentBusy || returning || topEvents.length ? 'complete' : WORKFLOW_TOP_PHASES.has(phase) ? 'active' : 'idle',
     accent: 'orchestrator-accent',
   }));
-  container.append(workflowConnector('두 Agent에게 병렬 전달', agentBusy));
+  container.append(workflowConnector(
+    '두 Agent에게 병렬 전달',
+    agentBusy ? 'active' : workersStarted || returning || synthesisDone ? 'complete' : 'idle',
+    'split',
+  ));
   const grid = document.createElement('div');
   grid.className = 'workflow-worker-grid';
   for (const [role, label, glyph] of [['claude', 'Claude', 'C'], ['codex', 'ChatGPT', 'G']]) {
@@ -1153,8 +1249,7 @@ function renderPlanningCycleBody(container, events, phase) {
       accent: role === 'claude' ? 'claude-accent' : 'codex-accent',
     }));
   }
-  container.append(grid, workflowConnector('Agent 결과 회수', returning));
-  const synthesisDone = finalEvents.some((event) => workflowArtifactType(event) === 'synthesis');
+  container.append(grid, workflowConnector('Agent 결과 회수', returning ? 'active' : synthesisDone ? 'complete' : 'idle', 'merge'));
   container.append(createWorkflowCycleNode({
     key: 'synthesis',
     label: 'Orchestrator 종합',
@@ -1175,12 +1270,21 @@ function renderWorkflowMetrics() {
     totals.calls += 1;
     totals.input += Number(usage.input_tokens ?? usage.inputTokens) || 0;
     totals.output += Number(usage.output_tokens ?? usage.outputTokens) || 0;
+    // 캐시 토큰도 실제 처리량·과금 대상이므로 합산한다(호출당 대부분을 차지할 수 있음).
+    totals.cache += (Number(usage.cache_creation_input_tokens ?? usage.cacheCreationInputTokens) || 0)
+      + (Number(usage.cache_read_input_tokens ?? usage.cacheReadInputTokens) || 0)
+      + (Number(usage.cached_input_tokens ?? usage.cachedInputTokens) || 0);
     totals.cost += Number(usage.total_cost_usd ?? usage.costUsd) || 0;
     return totals;
-  }, { calls: 0, input: 0, output: 0, cost: 0 });
+  }, { calls: 0, input: 0, output: 0, cache: 0, cost: 0 });
   const calls = Math.max(Number(serverTotals.calls) || 0, eventTotals.calls);
   const input = Math.max(Number(serverTotals.inputTokens) || 0, eventTotals.input);
   const output = Math.max(Number(serverTotals.outputTokens) || 0, eventTotals.output);
+  const serverCache = (Number(serverTotals.cacheCreationInputTokens) || 0)
+    + (Number(serverTotals.cacheReadInputTokens) || 0)
+    + (Number(serverTotals.cachedInputTokens) || 0);
+  const cache = Math.max(serverCache, eventTotals.cache);
+  const cost = Math.max(Number(serverTotals.costUsd) || 0, eventTotals.cost);
   const fallbacks = Math.max(
     Number(app.state?.modelRouting?.fallbackCount) || 0,
     app.workflowEvents.filter((event) => event.fallback).length,
@@ -1192,11 +1296,19 @@ function renderWorkflowMetrics() {
   ui.workflowMetrics.replaceChildren();
   [
     ['호출', calls],
-    ['토큰', input + output ? `${(input + output).toLocaleString()}` : '—'],
+    [
+      '토큰',
+      input + output + cache ? `${(input + output + cache).toLocaleString()}` : '—',
+      input + output + cache
+        ? `입력 ${input.toLocaleString()} · 출력 ${output.toLocaleString()} · 캐시 ${cache.toLocaleString()}`
+        : '이 세션에는 토큰 기록이 없습니다.',
+    ],
+    ['비용', cost ? `$${cost.toFixed(3)}` : '—'],
     ['Fallback', fallbacks],
     ['차단', circuits],
-  ].forEach(([label, value]) => {
+  ].forEach(([label, value, hint]) => {
     const item = document.createElement('span');
+    if (hint) item.title = hint;
     item.innerHTML = `${escapeHtml(label)} <strong>${escapeHtml(value)}</strong>`;
     ui.workflowMetrics.append(item);
   });
@@ -2425,23 +2537,374 @@ function structuredNode(value) {
   return paragraph;
 }
 
+const ARTIFACT_TYPE_LABELS = {
+  harness_set: '작업 Harness',
+  task_package: '워커 과업 명세',
+  draft: '기획 초안',
+  critique: '교차 비평',
+  revision: '개정안',
+  synthesis: '통합 기획안',
+  decision_frame: '의사결정 프레임',
+  advisor_analysis: '독립 분석',
+  peer_review: '익명 동료평가',
+  council_verdict: 'Council 최종 판단',
+  council_reports: 'Council 보고서',
+  council_clarification: '확인 질문',
+};
+
+const ARTIFACT_ROLE_LABELS = {
+  orchestrator: 'Orchestrator',
+  claude: 'Claude 워커',
+  codex: 'ChatGPT 워커',
+  claudeWorker: 'Claude 워커',
+  codexWorker: 'ChatGPT 워커',
+  councilFramer: 'Council Framer',
+  councilChair: 'Council Chair',
+};
+
+const INTERNAL_ARTIFACT_KEYS = new Set(['schemaVersion', 'artifactType', 'type', 'planVersion', 'cycle', 'author', 'perspective']);
+
+function canonicalArtifactType(value) {
+  return String(value || '').trim().replace(/([a-z])([A-Z])/g, '$1_$2').replace(/[\s-]+/g, '_').toLowerCase();
+}
+
+function displayArtifactType(value) {
+  const type = canonicalArtifactType(value);
+  return ARTIFACT_TYPE_LABELS[type] || (type ? type.replace(/_/g, ' ') : '결과');
+}
+
+function artifactRoleKey(event = {}) {
+  if (event.logicalRole) return event.logicalRole;
+  return ({ claude: 'claudeWorker', codex: 'codexWorker' }[event.role] || event.role || 'orchestrator');
+}
+
+function displayArtifactRole(role) {
+  if (ARTIFACT_ROLE_LABELS[role]) return ARTIFACT_ROLE_LABELS[role];
+  if (String(role).startsWith('councilAdvisor:')) return 'Council Advisor';
+  if (String(role).startsWith('councilReviewer:')) return 'Council Reviewer';
+  return String(role || '실행 기록');
+}
+
+function displayModelRoute(route = {}) {
+  const provider = route.brain === 'codex' ? 'ChatGPT (Codex)' : route.brain === 'claude' ? 'Claude' : route.brain;
+  return [provider, route.model, route.effort ? `effort ${route.effort}` : ''].filter(Boolean).join(' · ');
+}
+
+function routeForArtifact(event, artifactType) {
+  if (event?.modelRoute && typeof event.modelRoute === 'object') return { route: event.modelRoute, source: 'event' };
+  const targetType = canonicalArtifactType(artifactType);
+  const targetRole = artifactRoleKey(event);
+  const records = Array.isArray(app.state?.modelRouting?.latest) ? app.state.modelRouting.latest : [];
+  const eventTime = Date.parse(event?.timestamp || event?.t || event?.time || '');
+  const candidates = records.filter((record) => (
+    canonicalArtifactType(record.artifactType) === targetType && record.role === targetRole
+  ));
+  if (!candidates.length) return null;
+  const closest = [...candidates].sort((left, right) => {
+    if (!Number.isFinite(eventTime)) return Date.parse(right.at || 0) - Date.parse(left.at || 0);
+    return Math.abs(Date.parse(left.at || 0) - eventTime) - Math.abs(Date.parse(right.at || 0) - eventTime);
+  })[0];
+  const delta = Number.isFinite(eventTime) ? Math.abs(Date.parse(closest.at || 0) - eventTime) : 0;
+  return !Number.isFinite(delta) || delta <= 15 * 60_000 ? { route: closest, source: 'routing' } : null;
+}
+
+function configuredRouteForArtifact(event) {
+  const role = artifactRoleKey(event);
+  const config = app.state?.config || {};
+  const route = config[role];
+  return route?.brain && route?.model ? route : null;
+}
+
+function isCouncilAnonymityActive(artifactType) {
+  const activePhase = ['framing', 'independent_analysis', 'anonymous_peer_review'].includes(app.phase);
+  return activePhase && ['advisor_analysis', 'peer_review'].includes(canonicalArtifactType(artifactType));
+}
+
+function appendProvenanceChip(container, label, value, tone = '') {
+  const chip = document.createElement('span');
+  chip.className = `artifact-provenance-chip${tone ? ` ${tone}` : ''}`;
+  const key = document.createElement('strong');
+  key.textContent = label;
+  const text = document.createElement('span');
+  text.textContent = value;
+  chip.append(key, text);
+  container.append(chip);
+}
+
+function renderArtifactProvenance(container, event, artifactType) {
+  container.replaceChildren();
+  if (isCouncilAnonymityActive(artifactType)) {
+    appendProvenanceChip(container, '익명성', '상호평가 완료 후 출처 공개', 'is-private');
+    return;
+  }
+  const routeInfo = routeForArtifact(event, artifactType);
+  const configured = configuredRouteForArtifact(event);
+  appendProvenanceChip(container, '작성', displayArtifactRole(artifactRoleKey(event)));
+  if (routeInfo?.route) {
+    appendProvenanceChip(container, routeInfo.source === 'event' ? '실행 모델' : '실행 기록', displayModelRoute(routeInfo.route));
+  } else if (configured) {
+    appendProvenanceChip(container, '설정 모델', displayModelRoute(configured), 'is-muted');
+  } else {
+    appendProvenanceChip(container, '모델 기록', '이전 실행 기록에 없음', 'is-muted');
+  }
+  const type = canonicalArtifactType(artifactType);
+  if (!['synthesis', 'council_verdict'].includes(type)) return;
+  const contributors = ['claudeWorker', 'codexWorker']
+    .map((role) => {
+      const record = [...(app.state?.modelRouting?.latest || [])].reverse().find((entry) => entry.role === role);
+      return record?.brain && record?.model ? `${displayArtifactRole(role)} · ${displayModelRoute(record)}` : '';
+    })
+    .filter(Boolean);
+  if (contributors.length) appendProvenanceChip(container, '통합 참고', contributors.join(' / '), 'is-contributors');
+}
+
+function createOutcomeSection(title, className = '') {
+  const section = document.createElement('section');
+  section.className = `outcome-section${className ? ` ${className}` : ''}`;
+  const heading = document.createElement('h4');
+  heading.textContent = title;
+  section.append(heading);
+  return section;
+}
+
+function addNarrativeSection(container, title, value, { markdownValue = false } = {}) {
+  if (!textFrom(value).trim()) return false;
+  const section = createOutcomeSection(title, 'outcome-narrative');
+  const body = document.createElement('div');
+  body.className = 'outcome-copy';
+  if (markdownValue) body.innerHTML = markdown(value);
+  else body.textContent = textFrom(value);
+  section.append(body);
+  container.append(section);
+  return true;
+}
+
+function addStringListSection(container, title, values, limit = 5) {
+  if (!Array.isArray(values) || !values.length) return false;
+  const section = createOutcomeSection(title);
+  const list = document.createElement('ul');
+  list.className = 'outcome-list';
+  values.slice(0, limit).forEach((value) => {
+    const item = document.createElement('li');
+    item.textContent = textFrom(value);
+    list.append(item);
+  });
+  section.append(list);
+  if (values.length > limit) {
+    const more = document.createElement('p');
+    more.className = 'outcome-more';
+    more.textContent = `추가 ${values.length - limit}개 항목은 읽기 모드에서 확인하세요.`;
+    section.append(more);
+  }
+  container.append(section);
+  return true;
+}
+
+function addDecisionSection(container, values, limit = 5) {
+  if (!Array.isArray(values) || !values.length) return false;
+  const section = createOutcomeSection('핵심 결정');
+  const list = document.createElement('ol');
+  list.className = 'outcome-list outcome-decisions';
+  values.slice(0, limit).forEach((entry) => {
+    const item = document.createElement('li');
+    const head = document.createElement('div');
+    head.className = 'outcome-item-head';
+    const topic = document.createElement('strong');
+    topic.textContent = textFrom(entry?.topic || entry?.title || '결정');
+    head.append(topic);
+    if (entry?.status) {
+      const status = document.createElement('span');
+      status.className = `outcome-status is-${String(entry.status).toLowerCase()}`;
+      status.textContent = ({ decided: '확정', provisional: '잠정', open: '검토 필요' }[entry.status] || entry.status);
+      head.append(status);
+    }
+    item.append(head);
+    const decision = textFrom(entry?.decision || entry?.recommendation || entry?.value);
+    if (decision) {
+      const text = document.createElement('p');
+      text.textContent = decision;
+      item.append(text);
+    }
+    const rationale = textFrom(entry?.rationale || entry?.evidence);
+    if (rationale) {
+      const note = document.createElement('p');
+      note.className = 'outcome-note';
+      note.textContent = `근거 · ${rationale}`;
+      item.append(note);
+    }
+    list.append(item);
+  });
+  section.append(list);
+  if (values.length > limit) {
+    const more = document.createElement('p');
+    more.className = 'outcome-more';
+    more.textContent = `추가 ${values.length - limit}개 결정은 읽기 모드에서 확인하세요.`;
+    section.append(more);
+  }
+  container.append(section);
+  return true;
+}
+
+function addObjectListSection(container, title, values, fields, limit = 5) {
+  if (!Array.isArray(values) || !values.length) return false;
+  const section = createOutcomeSection(title);
+  const list = document.createElement('ul');
+  list.className = 'outcome-list outcome-object-list';
+  values.slice(0, limit).forEach((entry) => {
+    const item = document.createElement('li');
+    const headline = textFrom(entry?.[fields.headline] || entry?.title || entry?.name || entry);
+    const strong = document.createElement('strong');
+    strong.textContent = headline;
+    item.append(strong);
+    fields.details.forEach(({ key, label }) => {
+      const value = textFrom(entry?.[key]);
+      if (!value) return;
+      const detail = document.createElement('p');
+      detail.className = key === 'impact' || key === 'rationale' ? 'outcome-note' : '';
+      detail.textContent = `${label} · ${value}`;
+      item.append(detail);
+    });
+    list.append(item);
+  });
+  section.append(list);
+  if (values.length > limit) {
+    const more = document.createElement('p');
+    more.className = 'outcome-more';
+    more.textContent = `추가 ${values.length - limit}개 항목은 읽기 모드에서 확인하세요.`;
+    section.append(more);
+  }
+  container.append(section);
+  return true;
+}
+
+function renderOutcome(artifact, artifactType, { expanded = false } = {}) {
+  const body = document.createElement('div');
+  body.className = 'outcome-body';
+  if (typeof artifact === 'string') {
+    addNarrativeSection(body, '결과', artifact, { markdownValue: true });
+    return body;
+  }
+  if (!artifact || typeof artifact !== 'object') {
+    addNarrativeSection(body, '결과', String(artifact ?? ''));
+    return body;
+  }
+  const type = canonicalArtifactType(artifactType || artifact.artifactType);
+  const limit = expanded ? Number.MAX_SAFE_INTEGER : 4;
+  let rendered = false;
+  const narrative = (title, value, options) => { rendered = addNarrativeSection(body, title, value, options) || rendered; };
+  const strings = (title, values) => { rendered = addStringListSection(body, title, values, limit) || rendered; };
+  const objects = (title, values, fields) => { rendered = addObjectListSection(body, title, values, fields, limit) || rendered; };
+
+  if (['synthesis', 'council_verdict'].includes(type)) {
+    narrative('핵심 요약', artifact.executiveSummary || artifact.recommendation || artifact.summary);
+    addDecisionSection(body, artifact.decisions, limit); rendered ||= Array.isArray(artifact.decisions) && artifact.decisions.length > 0;
+    strings('위원회 합의', artifact.whereCouncilAgrees);
+    strings('의견 충돌', artifact.whereCouncilClashes);
+    strings('발견된 사각지대', artifact.blindSpots);
+    narrative('최종 권고', artifact.recommendation);
+    narrative('가장 먼저 할 일', artifact.firstAction);
+    objects('다음 행동', artifact.nextActions, { headline: 'action', details: [{ key: 'when', label: '시점' }, { key: 'outcome', label: '기대 결과' }] });
+    objects('주요 리스크', artifact.risks, { headline: 'risk', details: [{ key: 'severity', label: '심각도' }, { key: 'trigger', label: '신호' }, { key: 'mitigation', label: '대응' }] });
+    objects('검증 기준', artifact.validationPlan, { headline: 'criterion', details: [{ key: 'passCondition', label: '통과 기준' }, { key: 'owner', label: '책임' }, { key: 'method', label: '방법' }] });
+    objects('확인할 질문', artifact.requiredQuestions, { headline: 'question', details: [{ key: 'impact', label: '영향' }] });
+    objects('선택 질문', artifact.optionalQuestions, { headline: 'question', details: [{ key: 'impact', label: '영향' }] });
+  } else if (['draft', 'revision'].includes(type)) {
+    narrative('핵심 요약', artifact.summary);
+    addDecisionSection(body, artifact.decisions, limit); rendered ||= Array.isArray(artifact.decisions) && artifact.decisions.length > 0;
+    strings('요구사항 반영', artifact.requirementCoverage);
+    objects('주요 리스크', artifact.risks, { headline: 'risk', details: [{ key: 'severity', label: '심각도' }, { key: 'mitigation', label: '대응' }] });
+    objects('확인할 질문', artifact.questions, { headline: 'question', details: [{ key: 'impact', label: '영향' }] });
+  } else if (type === 'critique') {
+    narrative('검토 판정', artifact.verdict === 'accept' ? '수용 가능' : artifact.verdict === 'revise' ? '개정 필요' : artifact.verdict);
+    strings('강점', artifact.strengths);
+    objects('개선이 필요한 항목', artifact.issues, { headline: 'description', details: [{ key: 'severity', label: '심각도' }, { key: 'recommendation', label: '권고' }] });
+    strings('누락 요구사항', artifact.missingRequirementIds);
+  } else if (type === 'decision_frame') {
+    narrative('결정할 사안', artifact.decision);
+    strings('선택지', artifact.options);
+    strings('제약 조건', artifact.constraints);
+    strings('현재 근거', artifact.evidence);
+    narrative('추가 확인', artifact.clarifyingQuestion);
+  } else if (type === 'advisor_analysis') {
+    narrative('결론', artifact.headline || artifact.recommendation);
+    narrative('검토 내용', artifact.assessment);
+    narrative('권고', artifact.recommendation);
+    narrative('첫 행동', artifact.firstAction);
+    strings('핵심 위험', artifact.keyRisks);
+  } else if (type === 'peer_review') {
+    narrative('가장 강한 분석', artifact.strongestWhy);
+    narrative('가장 큰 사각지대', artifact.biggestBlindSpotWhy);
+    narrative('공통 누락', artifact.allMissed);
+  } else if (type === 'task_package') {
+    narrative('목표', artifact.objective);
+    const deliverable = artifact.deliverable;
+    if (deliverable && typeof deliverable === 'object') {
+      narrative('기대 산출물', [deliverable.kind, deliverable.audience, deliverable.format, deliverable.scope].filter(Boolean).join(' · '));
+    }
+    strings('요구사항', artifact.requirements);
+    strings('제약 조건', artifact.constraints);
+    strings('완료 기준', artifact.acceptanceCriteria);
+  } else {
+    narrative('핵심 요약', artifact.executiveSummary || artifact.summary || artifact.assessment || artifact.recommendation || artifact.headline);
+    strings('권고', artifact.recommendations || artifact.nextActions);
+  }
+
+  if (artifact.planMarkdown) {
+    if (expanded) narrative('상세 실행계획', artifact.planMarkdown, { markdownValue: true });
+    else {
+      const hint = document.createElement('p');
+      hint.className = 'outcome-reader-hint';
+      hint.textContent = '상세 실행계획과 전체 검증 표는 읽기 모드에서 확인할 수 있습니다.';
+      body.append(hint);
+      rendered = true;
+    }
+  }
+  if (!rendered) {
+    const fallback = Object.entries(artifact)
+      .filter(([key, value]) => !INTERNAL_ARTIFACT_KEYS.has(key) && (typeof value === 'string' || Array.isArray(value)))
+      .slice(0, 4);
+    fallback.forEach(([key, value]) => {
+      if (Array.isArray(value)) strings(key.replace(/([A-Z])/g, ' $1'), value);
+      else narrative(key.replace(/([A-Z])/g, ' $1'), value);
+    });
+  }
+  return body;
+}
+
 function artifactTitle(event, kind, artifact) {
   if (typeof artifact === 'object' && artifact) {
-    return textFrom(artifact.title || artifact.name || artifact.artifactType || artifact.type || artifact.schema)
-      || (kind === 'checkpoint' ? '통합 1차 기획안' : '구조화 산출물');
+    return textFrom(artifact.title || artifact.name || artifact.headline)
+      || displayArtifactType(event.artifactType || event.artifact_type || artifact.artifactType || artifact.type || kind);
   }
   const labels = {
     checkpoint: '통합 1차 기획안', evaluation: '기획안 평가', task_package: '워커 과업 명세',
     draft_artifact: '기획 초안', critique_artifact: '교차 비평', revision_artifact: '개정안',
     synthesis_artifact: '통합 기획안', plan: '통합 기획안',
   };
-  return labels[kind] || event.title || '구조화 산출물';
+  return labels[kind] || event.title || '결과';
+}
+
+function openArtifactReader(event, kind, artifact, artifactType) {
+  const title = artifactTitle(event, kind, artifact);
+  ui.artifactReaderType.textContent = displayArtifactType(artifactType);
+  ui.artifactReaderTitle.textContent = title;
+  ui.artifactReaderMeta.textContent = metaValues(event).join(' · ');
+  renderArtifactProvenance(ui.artifactReaderProvenance, event, artifactType);
+  ui.artifactReaderBody.replaceChildren(renderOutcome(artifact, artifactType, { expanded: true }));
+  ui.artifactReaderRaw.replaceChildren(structuredNode(artifact));
+  if (typeof ui.artifactReader.showModal === 'function') {
+    if (!ui.artifactReader.open) ui.artifactReader.showModal();
+  } else {
+    ui.artifactReader.setAttribute('open', '');
+  }
 }
 
 function renderArtifact(event, kind, rawArtifact) {
   if (rawArtifact === undefined || rawArtifact === null || rawArtifact === '') return;
   const artifact = sanitizePublic(rawArtifact);
-  const key = hash(stableStringify({ artifact, cycle: event.cycle, version: event.planVersion || event.plan_version }));
+  // 동일 결과는 생성 완료 이벤트와 승인 체크포인트에서 다시 전달될 수 있다.
+  // 업무 결과 목록에서는 같은 Cycle의 동일 본문을 한 번만 보여준다.
+  const key = hash(stableStringify({ artifact, cycle: event.cycle }));
   if (app.renderedArtifacts.has(key)) return;
   app.renderedArtifacts.add(key);
 
@@ -2457,6 +2920,7 @@ function renderArtifact(event, kind, rawArtifact) {
   card.open = ['checkpoint', 'plan', 'synthesis_artifact'].includes(kind)
     || artifact?.artifactType === 'synthesis';
   const header = document.createElement('summary');
+  header.className = 'artifact-card-summary';
   const title = document.createElement('h3');
   title.textContent = artifactTitle(event, kind, artifact);
   const meta = document.createElement('div');
@@ -2466,7 +2930,20 @@ function renderArtifact(event, kind, rawArtifact) {
     span.textContent = value;
     meta.append(span);
   }
-  header.append(title, meta);
+  const provenance = document.createElement('div');
+  provenance.className = 'artifact-provenance';
+  renderArtifactProvenance(provenance, event, artifactType);
+  header.append(title, meta, provenance);
+
+  const actions = document.createElement('div');
+  actions.className = 'artifact-actions';
+  const openReader = document.createElement('button');
+  openReader.className = 'button ghost compact';
+  openReader.type = 'button';
+  openReader.textContent = '전체 폭으로 읽기';
+  openReader.setAttribute('aria-label', `${artifactTitle(event, kind, artifact)} 전체 폭으로 읽기`);
+  openReader.addEventListener('click', () => openArtifactReader(event, kind, artifact, artifactType));
+  actions.append(openReader);
 
   const body = document.createElement('div');
   body.className = 'artifact-body';
@@ -2476,7 +2953,8 @@ function renderArtifact(event, kind, rawArtifact) {
     materialized = true;
     body.replaceChildren();
     if (typeof artifact === 'string') body.innerHTML = markdown(artifact);
-    else body.append(structuredNode(artifact));
+    else body.append(renderOutcome(artifact, artifactType));
+    applyReadMore(body, actions);
   };
   if (card.open) materialize();
   else {
@@ -2486,7 +2964,7 @@ function renderArtifact(event, kind, rawArtifact) {
     body.append(hint);
     card.addEventListener('toggle', () => { if (card.open) materialize(); }, { once: true });
   }
-  card.append(header, body);
+  card.append(header, actions, body);
   ui.artifactList.append(card);
   ui.artifactSection.classList.remove('hidden');
   updateCount('artifact');
@@ -3407,6 +3885,15 @@ ui.applyRecommended?.addEventListener('click', () => {
   setTicker('최신 모델 기준의 권장 라우팅을 적용했습니다.');
 });
 ui.artifactFilter?.addEventListener('change', applyArtifactFilter);
+ui.closeArtifactReader?.addEventListener('click', () => {
+  if (typeof ui.artifactReader.close === 'function') ui.artifactReader.close();
+  else ui.artifactReader.removeAttribute('open');
+});
+ui.artifactReader?.addEventListener('click', (event) => {
+  if (event.target !== ui.artifactReader) return;
+  if (typeof ui.artifactReader.close === 'function') ui.artifactReader.close();
+  else ui.artifactReader.removeAttribute('open');
+});
 ui.workflowFollow?.addEventListener('click', () => {
   setWorkflowFollow(true);
   followWorkflowTarget(app.workflowTarget, true);

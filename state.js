@@ -36,13 +36,15 @@ function now() { return new Date().toISOString(); }
 function inferSessionTitle(source, fallback = 'New AI Council session') {
   if (source?.sessionTitle && source.sessionTitle !== 'New AI Council session') return source.sessionTitle;
   if (source?.title && source.title !== 'New AI Council session') return source.title;
-  const instruction = source?.lastInstruction
-    || (Array.isArray(source?.transcript)
-      ? [...source.transcript].reverse().find((event) => event?.role === 'user')?.message
-      : null);
-  return instruction
-    ? String(instruction).replace(/\s+/g, ' ').trim().slice(0, 80)
-    : fallback;
+  // 세션 제목은 "그 세션이 무엇을 하려던 것인가"이므로 최신 피드백이 아니라
+  // 최초 지시를 쓴다. (reverse()를 쓰면 제목이 마지막 피드백으로 덮인다.)
+  const firstUserMessage = Array.isArray(source?.transcript)
+    ? source.transcript.find((event) => event?.role === 'user')?.message
+    : null;
+  const instruction = firstUserMessage || source?.lastInstruction;
+  if (!instruction) return fallback;
+  const normalized = String(instruction).replace(/\s+/g, ' ').trim();
+  return normalized.length > 48 ? `${normalized.slice(0, 47)}…` : normalized;
 }
 
 function atomicWriteJson(filePath, value) {
