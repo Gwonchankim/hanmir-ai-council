@@ -498,10 +498,31 @@ button { color: inherit; }
 .run-meta dt { color: var(--color-ash-gray); font-size: 9px; letter-spacing: .06em; text-transform: uppercase; }
 .run-meta dd { margin: 0; font-family: var(--font-signifier); font-size: 15px; }
 
+.global-error-dismiss {
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  /* 전역 버튼 규칙의 min-height(42px)가 이기면 세로로 긴 타원이 된다.
+     배너 안 아이콘 버튼이라 정사각형을 유지한다. */
+  min-height: 28px;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, .38);
+  border-radius: var(--radius-pill);
+  color: inherit;
+  background: transparent;
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+}
+.global-error-dismiss:hover { background: rgba(255, 255, 255, .16); }
 .global-error {
   position: sticky;
   z-index: 45;
   top: 0;
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
   width: min(1680px, calc(100% - 48px));
   margin: 0 auto 16px;
   padding: 12px 18px;
@@ -1998,6 +2019,9 @@ textarea::placeholder { color: var(--color-smoke-gray); }
   .setup-panel,
   .workspace-grid,
   .global-error { width: min(100% - 24px, 1680px); }
+  /* 탭바도 sticky top:0이라, 에러 배너(z-index 45)가 탭바(44)를 통째로 가려
+     오류가 뜨면 세션/채팅/인사이트 전환이 막혔다. 탭바 아래에 붙인다. */
+  .global-error { top: 67px; }
   .workspace-grid { grid-template-columns: 1fr; }
   .conversation-column { min-width: 0; }
   .inspector-panel { position: relative; top: auto; display: none; max-height: none; min-width: 0; }
@@ -2127,6 +2151,9 @@ textarea::placeholder { color: var(--color-smoke-gray); }
   textarea,
   .session-tools select,
   .harness-diff-controls select { font-size: 16px; }
+  /* iOS 줌 방지로 16px까지 커지면 "보관됨" + 네이티브 화살표가 86px 칸에
+     들어가지 않아 잘린다. 이 폭에서는 세로로 쌓는다. */
+  .session-tools { grid-template-columns: 1fr; }
 }
 
 @media (prefers-reduced-motion: reduce) {

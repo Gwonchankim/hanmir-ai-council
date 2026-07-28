@@ -85,7 +85,10 @@
         </div>
       </header>
 
-      <div id="globalError" class="global-error hidden" role="alert" tabindex="-1"></div>
+      <div id="globalError" class="global-error hidden" role="alert" tabindex="-1">
+        <span id="globalErrorText"></span>
+        <button type="button" id="globalErrorDismiss" class="global-error-dismiss" aria-label="오류 알림 닫기">✕</button>
+      </div>
 
       <nav id="mobileWorkspaceNav" class="mobile-workspace-nav" aria-label="모바일 작업 영역" role="tablist">
         <button id="mobileSessionsTab" class="mobile-workspace-tab" type="button" role="tab"
@@ -264,7 +267,7 @@
                 </div>
                 <span id="userCount" class="message-count" aria-label="사용자 메시지 수">0</span>
               </div>
-              <div id="userMessages" class="user-messages" aria-live="polite">
+              <div id="userMessages" class="user-messages" aria-live="polite" tabindex="0" role="group" aria-label="보낸 지시 목록 (스크롤 가능)">
                 <p class="empty-state">아직 입력한 지시가 없습니다.</p>
               </div>
             </section>
@@ -275,7 +278,7 @@
                 <h2 id="activityTitle">현재 진행</h2>
                 <p id="ticker" role="status" aria-live="polite">세션 설정 후 지시를 입력하세요.</p>
               </div>
-              <ol id="activityLog" class="activity-log" aria-label="단계 기록"></ol>
+              <ol id="activityLog" class="activity-log" aria-label="단계 기록 (스크롤 가능)" tabindex="0"></ol>
             </section>
 
             <section id="workflowPanel" class="workflow-panel" aria-labelledby="workflowTitle">
@@ -582,11 +585,11 @@
         <button id="closeArtifactReader" class="button ghost compact" type="button">닫기</button>
       </header>
       <div id="artifactReaderProvenance" class="artifact-provenance artifact-reader-provenance" aria-label="산출물 출처"></div>
-      <div id="artifactReaderBody" class="artifact-reader-body"></div>
+      <div id="artifactReaderBody" class="artifact-reader-body" tabindex="0" role="group" aria-label="산출물 본문 (스크롤 가능)"></div>
       <details class="artifact-raw">
         <summary>원문 구조 보기</summary>
         <p class="helper-text">검증·감사용 내부 구조입니다. 업무 결과 검토에는 위 요약을 사용하세요.</p>
-        <div id="artifactReaderRaw" class="artifact-raw-body"></div>
+        <div id="artifactReaderRaw" class="artifact-raw-body" tabindex="0" role="group" aria-label="원본 JSON (스크롤 가능)"></div>
       </details>
     </article>
   </dialog>

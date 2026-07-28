@@ -24,6 +24,8 @@ const ui = {
   remoteModeBadge: byId('remoteModeBadge'),
   phasePill: byId('phasePill'),
   phaseElapsed: byId('phaseElapsed'),
+  globalErrorText: byId('globalErrorText'),
+  globalErrorDismiss: byId('globalErrorDismiss'),
   roundValue: byId('roundValue'),
   cycleValue: byId('cycleValue'),
   planVersionValue: byId('planVersionValue'),
@@ -210,6 +212,14 @@ function phaseProgress(phase, mode) {
   const steps = PHASE_SEQUENCE[mode === 'decision_council' ? 'decision_council' : 'planning'];
   const index = steps.findIndex((group) => group.includes(phase));
   return index < 0 ? null : { step: index + 1, total: steps.length };
+}
+
+// CSS의 scroll-behavior:auto는 CSS 스크롤에만 적용된다. scrollTo/scrollIntoView에
+// 넘긴 behavior 옵션이 그것을 덮어쓰므로, 축소 모션 설정에서도 부드러운 스크롤이
+// 실행된다. 워크플로 자동 추적은 이벤트마다 일어나 특히 문제가 된다.
+const REDUCED_MOTION = window.matchMedia('(prefers-reduced-motion: reduce)');
+function scrollBehavior() {
+  return REDUCED_MOTION.matches ? 'auto' : 'smooth';
 }
 
 function formatElapsed(ms) {
@@ -465,9 +475,13 @@ function renderAccessMode(context = app.securityContext) {
 
 function showError(message, focus = false) {
   const text = textFrom(message).trim();
-  ui.globalError.textContent = text;
+  // 배너 안에 닫기 버튼이 있으므로 컨테이너가 아니라 텍스트 노드만 갱신한다.
+  if (ui.globalErrorText) ui.globalErrorText.textContent = text;
+  else ui.globalError.textContent = text;
   ui.globalError.classList.toggle('hidden', !text);
-  if (text && focus) ui.globalError.focus();
+  // role="alert"는 이미 자동으로 낭독된다. 여기에 focus()까지 걸면 스크린리더가
+  // 같은 내용을 두 번 읽고, sticky 배너로 화면이 최상단으로 튄다.
+  if (text && focus && !ui.globalErrorText) ui.globalError.focus();
 }
 
 function setTicker(message, error = false) {
@@ -1478,7 +1492,7 @@ function followWorkflowTarget(target = app.workflowTarget, immediate = false) {
   app.workflowFollowTimer = window.setTimeout(() => {
     const top = Math.max(0, element.offsetTop - ((ui.workflowViewport.clientHeight - element.offsetHeight) / 2));
     app.workflowProgrammaticScroll = true;
-    ui.workflowViewport.scrollTo({ top, behavior: immediate ? 'auto' : 'smooth' });
+    ui.workflowViewport.scrollTo({ top, behavior: immediate ? 'auto' : scrollBehavior() });
     window.setTimeout(() => { app.workflowProgrammaticScroll = false; }, immediate ? 50 : 550);
   }, immediate ? 0 : 70);
 }
@@ -3752,7 +3766,7 @@ function openNewSessionSetup() {
   ui.toggleSetup.textContent = '설정 접기';
   loadModelCapacity({ force: !app.modelCapacity }).catch(() => {});
   startModelCapacityPolling();
-  ui.toggleSetup.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  ui.toggleSetup.scrollIntoView({ behavior: scrollBehavior(), block: 'center' });
   ui.orcBrain.focus({ preventScroll: true });
 }
 
@@ -4046,6 +4060,9 @@ ui.artifactReader?.addEventListener('click', (event) => {
   if (typeof ui.artifactReader.close === 'function') ui.artifactReader.close();
   else ui.artifactReader.removeAttribute('open');
 });
+// 예전에는 다른 동작이 showError('')를 부를 때까지 배너를 치울 방법이 없었다.
+ui.globalErrorDismiss?.addEventListener('click', () => showError(''));
+
 ui.workflowFollow?.addEventListener('click', () => {
   // aria-pressed 토글 버튼인데 항상 true로 두면 눌린 상태를 해제할 수 없다.
   // (이전에는 wheel/touch 같은 숨은 제스처로만 끌 수 있었다)
