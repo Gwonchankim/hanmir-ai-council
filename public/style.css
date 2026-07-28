@@ -1,36 +1,59 @@
 :root {
-  color-scheme: light;
-  --color-ink-black: #17191c;
-  --color-paper-white: #ffffff;
-  --color-mist-gray: #f2f2f3;
-  --color-fog-white: #fafafb;
-  /* 회색 텍스트 3종은 WCAG AA(4.5:1)를 실제 배경(paper/mist/fog, peach 라디얼 합성 포함)
-     기준으로 통과하도록 조정했다. Steep의 차분한 쿨그레이 색상(色相)은 유지하고
-     명도만 낮췄으며, slate > ash 순의 톤 위계도 그대로 남긴다. */
-  --color-slate-gray: #5f636d;
-  --color-ash-gray: #6a6d76;
-  --color-smoke-gray: #71757f;
-  --color-blush-peach: #fbe1d1;
-  --color-sienna-brown: #5d2a1a;
+  color-scheme: dark;
+
+  /* === Dala 원본 토큰 ===
+     검정은 폴백이 아니라 주재료다. 채도 높은 색은 액션과 강조에만 쓴다. */
+  --color-void: #000000;
+  --color-bone-white: #ffffff;
+  --color-silver-mist: #bdbdbd;
+  --color-electric-iris: #8052ff;
+  --color-saffron-spark: #ffb829;
+  --color-deep-verdant: #15846e;
+
+  /* === 역할 매핑 ===
+     Steep(라이트) 시절 이름을 유지하되 값만 다크 역할로 바꿨다. 이름은 색이 아니라
+     "표면/텍스트 역할"로 읽어야 한다. 예: paper-white = 주 표면(=void),
+     ink-black = 최상위 텍스트(=흰색)이며, background로 쓰인 자리에서는
+     반전 강조(흰 배경 + 검정 글자)로 자연스럽게 동작한다. */
+  --color-paper-white: #000000;
+  --color-ink-black: #ffffff;
+  /* Dala는 순수 검정만 쓰라고 하지만, 이 앱은 3열 패널과 노드 그래프로 구조를
+     읽히는 작업 도구다. void에 거의 붙는 밝기(1.05~1.09:1)만 얹어 계층은 남기되
+     "패널이 떠 있다"는 인상은 유지한다. */
+  --color-mist-gray: #0e0e11;
+  --color-fog-white: #08080b;
+  /* 텍스트 3종 모두 void에서 AA를 크게 상회한다(11.18 / 7.46 / 7.46). */
+  --color-slate-gray: #bdbdbd;
+  --color-ash-gray: #9a9a9a;
+  --color-smoke-gray: #9a9a9a;
+  /* 액센트: peach 자리는 딥 바이올렛 틴트, sienna 자리는 역할별로 분리한다. */
+  --color-blush-peach: #16102b;
+  --color-accent-surface: #16102b;
+  --color-accent-solid: #8052ff;
+  --color-accent-strong: #ffb829;
+  --color-sienna-brown: #ffb829;
   /* 장식용 구분선 전용(비의미 요소이므로 3:1 대상 아님) */
-  --color-hairline: #ececec;
+  --color-hairline: #1e1e23;
   /* 워크플로 커넥터 선 전용(장식). */
-  --color-connector-line: #d8d9dc;
-  /* 폼·버튼 경계 전용. 1.4.11(비텍스트 대비) 3:1을 만족한다. */
-  --color-field-edge: #878a93;
+  --color-connector-line: #2c2c33;
+  /* 폼·버튼 경계 전용. void/mist/fog 어느 표면에서도 1.4.11의 3:1을 넘는다
+     (3.37 / 3.10 / 3.21). */
+  --color-field-edge: #606069;
 
-  /* 팔레트 밖 의미색. 값은 대비 검증을 마친 것이므로 토큰화만 하고 색상은 유지한다. */
-  --color-agent-claude: #725d4f;
-  --color-agent-codex: #28435c;
-  --color-info-fg: #31536e;
-  --color-info-bg: #e8f0f6;
-  --color-warn-fg: #8a4b16;
-  --color-warn-bg: #fff0d9;
-  --color-danger-strong: #bd4235;
-  --color-danger-border: #ad3427;
+  /* 의미색은 다크 표면 위에서 읽히도록 전경은 밝게, 배경은 어둡게 뒤집었다. */
+  --color-agent-claude: #c9a88f;
+  --color-agent-codex: #8fb4d9;
+  --color-info-fg: #9ec5e8;
+  --color-info-bg: #0d1a24;
+  --color-warn-fg: #ffb829;
+  --color-warn-bg: #241a08;
+  --color-danger-strong: #ff6b5e;
+  --color-danger-border: #ff8a7e;
 
-  --font-signifier: "Source Serif 4", "Iowan Old Style", "Palatino Linotype", Georgia, ui-serif, serif;
-  --font-sohne: Pretendard, Inter, "Noto Sans KR", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  /* Dala는 PPNeueMontreal 단일 서체를 쓴다. 라이선스 폰트이므로 명시된 대체인
+     Inter를 쓰되, 한글은 Pretendard가 같은 기하학적 인상을 유지한다. */
+  --font-signifier: Inter, Pretendard, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-sohne: Inter, Pretendard, "Noto Sans KR", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 
   --spacing-4: 4px;
   --spacing-8: 8px;
@@ -51,8 +74,11 @@
   /* 인라인 코드·미세 칩처럼 높이가 20px 안팎이라 12px면 알약이 되는 자리 */
   --radius-chip: 6px;
   --radius-pill: 9999px;
-  --shadow-floating: 0 0 0 1px rgba(4, 23, 43, .05), 0 20px 25px -5px rgba(0, 0, 0, .10), 0 8px 10px -6px rgba(0, 0, 0, .10);
-  --shadow-popover: 0 0 0 1px rgba(4, 23, 43, .05), 0 8px 40px rgba(0, 0, 0, .10);
+  /* Dala는 elevation을 쓰지 않는다. 다만 void 위에서는 검정 그림자가 보이지 않아
+     모달·팝오버가 배경에 녹아버리므로, 그림자 대신 아주 옅은 흰 링으로 경계만
+     세운다. 카드·패널에는 쓰지 않고 실제로 떠 있는 요소에만 남긴다. */
+  --shadow-floating: 0 0 0 1px rgba(255, 255, 255, .09);
+  --shadow-popover: 0 0 0 1px rgba(255, 255, 255, .11), 0 24px 64px rgba(0, 0, 0, .8);
   --rail-width: 264px;
   --rail-collapsed-width: 76px;
   font-family: var(--font-sohne);
@@ -68,14 +94,30 @@ html {
   scroll-behavior: smooth;
 }
 
+/* Dala는 본문을 weight 200으로 규정한다. 라틴 문자에서는 그 가벼움이 핵심이지만
+   한글은 획 밀도가 높아 200에서 자소가 뭉갠다. unicode-range로 한글만 300을 쓰는
+   가상 패밀리를 만들어, 영문·숫자는 원본의 에어리한 인상을 유지하고 한글은 읽히게 한다. */
+@font-face {
+  font-family: "Dala Body";
+  src: local("Inter"), local("Inter-ExtraLight");
+  font-weight: 200;
+  unicode-range: U+0000-024F, U+2000-206F, U+2190-21FF, U+2200-22FF, U+FF01-FF5E;
+}
+@font-face {
+  font-family: "Dala Body";
+  src: local("Pretendard"), local("Pretendard-Light"), local("Noto Sans KR");
+  font-weight: 300;
+  unicode-range: U+1100-11FF, U+3130-318F, U+A960-A97F, U+AC00-D7A3, U+D7B0-D7FF;
+}
+
 body {
   min-height: 100vh;
   margin: 0;
   color: var(--color-ink-black);
-  background: var(--color-paper-white);
-  font-family: var(--font-sohne);
-  font-weight: 400;
-  line-height: 1.45;
+  background: var(--color-void);
+  font-family: "Dala Body", var(--font-sohne);
+  font-weight: 300;
+  line-height: 1.5;
 }
 
 .mobile-workspace-nav,
@@ -429,13 +471,16 @@ button { color: inherit; }
   text-transform: uppercase;
 }
 
+/* Dala는 무게가 아니라 스케일과 음수 트래킹으로 위계를 만든다. 400 weight를
+   유지한 채 크기를 키우고 -0.04em을 준다. 랜딩용 78~113px은 작업 도구에 과하므로
+   한 단계 낮춘 대역을 쓴다. */
 .brand-block h1 {
   margin: 4px 0 0;
   font-family: var(--font-signifier);
-  font-size: clamp(34px, 4vw, 56px);
+  font-size: clamp(38px, 5vw, 68px);
   font-weight: 400;
-  line-height: 1.08;
-  letter-spacing: -.015em;
+  line-height: 1.1;
+  letter-spacing: -.04em;
 }
 
 .brand-block h1 em { font-weight: 400; }
@@ -481,7 +526,7 @@ button { color: inherit; }
 }
 
 .access-status { display: flex; align-items: center; gap: var(--spacing-8); }
-.remote-mode-badge[data-remote-mode="remote"] { border-style: double; color: var(--color-sienna-brown); background: var(--color-blush-peach); }
+.remote-mode-badge[data-remote-mode="remote"] { border-style: double; color: var(--color-sienna-brown); background: var(--color-accent-surface); }
 
 .connection-badge::before {
   width: 7px;
@@ -736,7 +781,7 @@ textarea::placeholder { color: var(--color-smoke-gray); }
   /* 정지 상태는 그림자 없음. blur 0 오프셋 그림자는 Steep 언어가 아니며,
      떠 있는 상태(hover의 translateY)에서만 --shadow-floating을 쓴다. */
   .setup-action-button-primary { color: var(--color-paper-white); background: var(--color-ink-black); }
-  .setup-action-button-primary:hover:not(:disabled) { background: var(--color-sienna-brown); border-color: var(--color-sienna-brown); box-shadow: var(--shadow-floating); }
+  .setup-action-button-primary:hover:not(:disabled) { background: var(--color-accent-solid); border-color: var(--color-sienna-brown); box-shadow: var(--shadow-floating); }
   .setup-action-icon { color: var(--color-sienna-brown); font-size: 16px; line-height: 1; }
   .setup-action-arrow { font-size: 17px; line-height: 1; transition: transform .18s ease; }
   .setup-action-button-primary:hover:not(:disabled) .setup-action-arrow { transform: translateX(2px); }
@@ -815,7 +860,7 @@ textarea::placeholder { color: var(--color-smoke-gray); }
   }
   .capacity-window strong { color: var(--color-ink-black); font-size: 15px; }
   .capacity-bar { width: 48px; height: 7px; overflow: hidden; border-radius: var(--radius-pill); background: var(--color-mist-gray); }
-  .capacity-bar > span { display: block; height: 100%; border-radius: inherit; background: var(--color-sienna-brown); }
+  .capacity-bar > span { display: block; height: 100%; border-radius: inherit; background: var(--color-accent-solid); }
   .capacity-provider.is-limited .capacity-bar > span { background: var(--color-danger-strong); }
   .capacity-provider.is-unavailable { grid-template-columns: minmax(130px, 155px) minmax(0, 1fr); }
   .capacity-status { color: var(--color-slate-gray); font-size: 12px; font-weight: 560; line-height: 1.45; text-align: right; }
@@ -838,7 +883,14 @@ textarea::placeholder { color: var(--color-smoke-gray); }
 .button:hover:not(:disabled) { transform: translateY(-1px); }
 .button:active:not(:disabled) { transform: none; }
 .button:disabled { opacity: .42; cursor: not-allowed; }
-.button.primary { color: var(--color-paper-white); background: var(--color-ink-black); }
+/* Dala의 단일 CTA: 채워진 바이올렛 pill. 흰 텍스트와 4.60:1로 AA를 넘는다.
+   이 색은 버튼 이외의 큰 배경 블록에는 쓰지 않는다. */
+.button.primary {
+  color: var(--color-bone-white);
+  border-color: transparent;
+  background: var(--color-electric-iris);
+}
+.button.primary:hover { background: #8f66ff; }
 .button.ghost,
 .button.warning,
 .button.danger { color: var(--color-ink-black); background: transparent; }
@@ -910,7 +962,7 @@ textarea::placeholder { color: var(--color-smoke-gray); }
   padding: 16px 18px;
   border-radius: var(--radius-elevated);
   background: var(--color-paper-white);
-  box-shadow: 0 0 0 1px rgba(4, 23, 43, .05);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, .09);
 }
 
 .message-meta,
@@ -1052,7 +1104,7 @@ textarea::placeholder { color: var(--color-smoke-gray); }
   min-width: 0;
   border: 1px solid var(--color-hairline);
   background:
-    radial-gradient(circle at 50% 0, rgba(251, 225, 209, .28), transparent 34%),
+    radial-gradient(circle at 50% 0, rgba(128, 82, 255, .16), transparent 42%),
     var(--color-fog-white);
 }
 .workflow-head {
@@ -1063,7 +1115,7 @@ textarea::placeholder { color: var(--color-smoke-gray); }
   gap: 20px;
   padding: 20px 22px 18px;
   border-bottom: 1px solid var(--color-hairline);
-  background: rgba(255, 255, 255, .86);
+  background: rgba(255, 255, 255, .05);
 }
 .workflow-head h2 {
   margin: 2px 0 3px;
@@ -1095,7 +1147,7 @@ textarea::placeholder { color: var(--color-smoke-gray); }
   background: var(--color-ash-gray);
 }
 .workflow-follow[aria-pressed="true"] .workflow-follow-dot {
-  background: var(--color-sienna-brown);
+  background: var(--color-accent-solid);
   box-shadow: 0 0 0 4px rgba(93, 42, 26, .10);
   animation: workflow-dot-pulse 1.6s ease-in-out infinite;
 }
@@ -1119,7 +1171,7 @@ textarea::placeholder { color: var(--color-smoke-gray); }
   border: 1px solid var(--color-hairline);
   border-radius: var(--radius-pill);
   color: var(--color-slate-gray);
-  background: rgba(255,255,255,.76);
+  background: rgba(255,255,255,.04);
   font-size: 10px;
   white-space: nowrap;
 }
@@ -1156,7 +1208,7 @@ textarea::placeholder { color: var(--color-smoke-gray); }
   min-width: 0;
   border: 1px solid var(--color-hairline);
   border-radius: var(--radius-input);
-  background: rgba(255,255,255,.72);
+  background: rgba(255,255,255,.035);
   overflow: hidden;
 }
 .workflow-cycle > summary {
@@ -1179,7 +1231,7 @@ textarea::placeholder { color: var(--color-smoke-gray); }
   gap: 0;
   padding: 20px;
   background:
-    radial-gradient(circle at 50% 0, rgba(251,225,209,.24), transparent 32%),
+    radial-gradient(circle at 50% 0, rgba(128,82,255,.13), transparent 40%),
     var(--color-fog-white);
 }
 .workflow-cycle-node {
@@ -1190,8 +1242,8 @@ textarea::placeholder { color: var(--color-smoke-gray); }
   margin-inline: auto;
   border: 1px solid var(--color-hairline);
   border-radius: var(--radius-sm);
-  background: rgba(255,255,255,.9);
-  box-shadow: 0 8px 24px rgba(23,25,28,.04);
+  background: rgba(255,255,255,.04);
+  box-shadow: 0 0 0 1px rgba(255,255,255,.07);
   isolation: isolate;
   overflow: hidden;
 }
@@ -1211,13 +1263,13 @@ textarea::placeholder { color: var(--color-smoke-gray); }
 }
 .workflow-cycle-node.is-active {
   border-color: transparent;
-  box-shadow: 0 16px 38px rgba(23,25,28,.11), 0 0 0 5px rgba(251,225,209,.30);
+  box-shadow: 0 0 0 1px rgba(255,255,255,.10), 0 0 0 5px rgba(128,82,255,.30);
 }
 .workflow-cycle-node.is-active::before {
   opacity: 1;
   animation: workflow-border-counterclockwise 1.8s linear infinite;
 }
-.workflow-cycle-node.is-complete { border-color: rgba(23,25,28,.24); }
+.workflow-cycle-node.is-complete { border-color: rgba(255,255,255,.26); }
 .workflow-cycle-node.is-error { border-color: var(--color-danger-border); }
 .workflow-cycle-node-head {
   display: grid;
@@ -1240,7 +1292,7 @@ textarea::placeholder { color: var(--color-smoke-gray); }
   font-size: 11px;
   font-weight: 560;
 }
-.advisor-accent .workflow-cycle-symbol { color: var(--color-sienna-brown); background: var(--color-blush-peach); }
+.advisor-accent .workflow-cycle-symbol { color: var(--color-sienna-brown); background: var(--color-accent-surface); }
 .claude-accent .workflow-cycle-symbol { background: var(--color-agent-claude); }
 .codex-accent .workflow-cycle-symbol { background: var(--color-agent-codex); }
 .workflow-cycle-badges {
@@ -1260,7 +1312,7 @@ textarea::placeholder { color: var(--color-smoke-gray); }
   white-space: nowrap;
 }
 .workflow-state-badge { color: var(--color-slate-gray); background: var(--color-fog-white); }
-.workflow-state-badge.is-active { color: var(--color-sienna-brown); background: var(--color-blush-peach); }
+.workflow-state-badge.is-active { color: var(--color-sienna-brown); background: var(--color-accent-surface); }
 .workflow-state-badge.is-complete { color: var(--color-paper-white); background: var(--color-ink-black); }
 .workflow-model-badge { color: var(--color-info-fg); background: var(--color-info-bg); }
 .workflow-fallback-badge { color: var(--color-warn-fg); background: var(--color-warn-bg); }
@@ -1287,11 +1339,11 @@ textarea::placeholder { color: var(--color-smoke-gray); }
   left: 50%;
   max-width: calc(100% - 24px);
   padding: 5px 10px;
-  border: 1px solid rgba(23, 25, 28, .20);
+  border: 1px solid rgba(255, 255, 255, .18);
   border-radius: var(--radius-pill);
   color: var(--color-slate-gray);
   background: var(--color-paper-white);
-  box-shadow: 0 4px 12px rgba(23,25,28,.06);
+  box-shadow: 0 0 0 1px rgba(255,255,255,.10);
   font-size: 10px;
   font-weight: 480;
   line-height: 1.25;
@@ -1310,27 +1362,27 @@ textarea::placeholder { color: var(--color-smoke-gray); }
 }
 .workflow-connector-track {
   fill: none;
-  stroke: rgba(23,25,28,.14);
+  stroke: rgba(255,255,255,.16);
   stroke-width: 9;
   stroke-linecap: round;
 }
 .workflow-connector-flow {
   fill: none;
-  stroke: rgba(23,25,28,.34);
+  stroke: rgba(255,255,255,.40);
   stroke-width: 4;
   stroke-linecap: round;
   stroke-linejoin: round;
   transition: stroke .24s ease;
 }
-.workflow-cycle-connector.is-complete .workflow-connector-flow { stroke: rgba(23,25,28,.70); }
-.workflow-cycle-connector.is-active .workflow-connector-track { stroke: rgba(251,225,209,.94); }
+.workflow-cycle-connector.is-complete .workflow-connector-flow { stroke: rgba(255,255,255,.78); }
+.workflow-cycle-connector.is-active .workflow-connector-track { stroke: rgba(128,82,255,.55); }
 .workflow-cycle-connector.is-active .workflow-connector-flow {
-  stroke: var(--color-sienna-brown);
+  stroke: var(--color-accent-solid);
   stroke-dasharray: 14 11;
   filter: drop-shadow(0 0 4px rgba(93,42,26,.30));
   animation: workflow-svg-flow 1.05s linear infinite;
 }
-.workflow-cycle-connector.is-idle .workflow-connector-flow { stroke: rgba(23,25,28,.27); }
+.workflow-cycle-connector.is-idle .workflow-connector-flow { stroke: rgba(255,255,255,.24); }
 .workflow-connector-mobile-path { display: none; }
 .workflow-cycle-connector.is-merge small { top: 49px; }
 @keyframes workflow-svg-flow { to { stroke-dashoffset: -50; } }
@@ -1353,7 +1405,7 @@ textarea::placeholder { color: var(--color-smoke-gray); }
   padding: 5px 10px;
   border-radius: var(--radius-pill);
   color: var(--color-slate-gray);
-  background: rgba(255,255,255,.8);
+  background: rgba(255,255,255,.045);
   font-size: 10px;
 }
 .workflow-progress-strip strong { color: var(--color-ink-black); }
@@ -1417,8 +1469,8 @@ textarea::placeholder { color: var(--color-smoke-gray); }
   min-width: 0;
   border: 1px solid var(--color-hairline);
   border-radius: var(--radius-card);
-  background: rgba(242, 242, 243, .94);
-  box-shadow: 0 10px 30px rgba(23, 25, 28, .04);
+  background: rgba(255, 255, 255, .05);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, .07);
   isolation: isolate;
   overflow: hidden;
   transition: box-shadow .24s ease, transform .24s ease, opacity .24s ease;
@@ -1447,14 +1499,14 @@ textarea::placeholder { color: var(--color-smoke-gray); }
 .workflow-node.is-active {
   border-color: transparent;
   background: var(--color-paper-white);
-  box-shadow: 0 18px 46px rgba(23, 25, 28, .12), 0 0 0 5px rgba(251, 225, 209, .32);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, .10), 0 0 0 5px rgba(128, 82, 255, .32);
   transform: translateY(-2px);
 }
 .workflow-node.is-active::before {
   opacity: 1;
   animation: workflow-border-counterclockwise 1.8s linear infinite;
 }
-.workflow-node.is-complete { border-color: rgba(23, 25, 28, .26); }
+.workflow-node.is-complete { border-color: rgba(255, 255, 255, .26); }
 .workflow-node.is-error { border-color: var(--color-danger-border); box-shadow: 0 0 0 4px rgba(173, 52, 39, .10); }
 .workflow-node-orchestrator { width: min(74%, 720px); margin-inline: auto; }
 .workflow-node-return { margin-bottom: 14px; }
@@ -1471,7 +1523,7 @@ textarea::placeholder { color: var(--color-smoke-gray); }
   padding: 9px 12px 9px 27px;
   border-radius: var(--radius-sm);
   color: var(--color-slate-gray);
-  background: rgba(255, 255, 255, .74);
+  background: rgba(255, 255, 255, .04);
   font-size: 11px;
   line-height: 1.45;
   overflow: hidden;
@@ -1490,10 +1542,10 @@ textarea::placeholder { color: var(--color-smoke-gray); }
 }
 .workflow-node.is-active .workflow-node-status {
   color: var(--color-ink-black);
-  background: var(--color-blush-peach);
+  background: var(--color-accent-surface);
 }
 .workflow-node.is-active .workflow-node-status::before {
-  background: var(--color-sienna-brown);
+  background: var(--color-accent-solid);
   animation: workflow-dot-pulse 1.2s ease-in-out infinite;
 }
 .workflow-node.is-complete .workflow-node-status::before { background: var(--color-ink-black); }
@@ -1568,7 +1620,7 @@ textarea::placeholder { color: var(--color-smoke-gray); }
   animation: workflow-spark-x 1.15s linear infinite;
 }
 .workflow-merge.is-flowing .workflow-line::after { animation-direction: reverse; }
-.workflow-return-badge { color: var(--color-sienna-brown); background: var(--color-blush-peach); }
+.workflow-return-badge { color: var(--color-sienna-brown); background: var(--color-accent-surface); }
 
 @keyframes workflow-border-counterclockwise {
   to { transform: rotate(-1turn); }
@@ -1602,7 +1654,7 @@ textarea::placeholder { color: var(--color-smoke-gray); }
   padding: 14px 15px;
   border-radius: var(--radius-elevated);
   background: var(--color-paper-white);
-  box-shadow: 0 0 0 1px rgba(4, 23, 43, .05);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, .09);
   font-size: 13px;
 }
 .empty-state { margin: auto; padding: 18px; color: var(--color-ash-gray); font-size: 13px; text-align: center; }
@@ -1636,7 +1688,7 @@ textarea::placeholder { color: var(--color-smoke-gray); }
 }
 .artifact-provenance-chip strong { color: var(--color-ink-black); font-weight: 480; }
 .artifact-provenance-chip.is-muted { color: var(--color-ash-gray); }
-.artifact-provenance-chip.is-private { color: var(--color-sienna-brown); background: var(--color-blush-peach); border-color: color-mix(in srgb, var(--color-sienna-brown) 18%, var(--color-hairline)); }
+.artifact-provenance-chip.is-private { color: var(--color-sienna-brown); background: var(--color-accent-surface); border-color: color-mix(in srgb, var(--color-sienna-brown) 18%, var(--color-hairline)); }
 .artifact-provenance-chip.is-contributors { flex-basis: 100%; border-style: dashed; }
 
 .outcome-body { display: grid; gap: 12px; }
@@ -1655,7 +1707,7 @@ textarea::placeholder { color: var(--color-smoke-gray); }
 .outcome-item-head { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; }
 .outcome-status { padding: 2px 6px; border-radius: var(--radius-pill); color: var(--color-slate-gray); background: var(--color-mist-gray); font-size: 10px; font-weight: 480; }
 .outcome-status.is-decided { color: var(--color-paper-white); background: var(--color-ink-black); }
-.outcome-status.is-provisional { color: var(--color-sienna-brown); background: var(--color-blush-peach); }
+.outcome-status.is-provisional { color: var(--color-sienna-brown); background: var(--color-accent-surface); }
 .outcome-note,
 .outcome-more,
 .outcome-reader-hint { margin: 7px 0 0; color: var(--color-slate-gray); font-size: 11px; line-height: 1.5; }
@@ -1672,7 +1724,7 @@ textarea::placeholder { color: var(--color-smoke-gray); }
   background: var(--color-paper-white);
   box-shadow: var(--shadow-popover);
 }
-.artifact-reader::backdrop { background: rgba(23, 25, 28, .42); backdrop-filter: blur(3px); }
+.artifact-reader::backdrop { background: rgba(0, 0, 0, .74); backdrop-filter: blur(3px); }
 .artifact-reader-shell { display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; height: 100%; }
 .artifact-reader-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; padding: 28px 32px 18px; border-bottom: 1px solid var(--color-hairline); }
 .artifact-reader-head h2 { margin: 2px 0 0; font-family: var(--font-signifier); font-size: clamp(26px, 3vw, 40px); font-weight: 400; line-height: 1.16; }
@@ -1774,7 +1826,7 @@ textarea::placeholder { color: var(--color-smoke-gray); }
   padding: 16px;
   border-radius: var(--radius-card);
   color: var(--color-sienna-brown);
-  background: var(--color-blush-peach);
+  background: var(--color-accent-surface);
   font-size: 12px;
   line-height: 1.55;
 }
@@ -1906,7 +1958,7 @@ textarea::placeholder { color: var(--color-smoke-gray); }
 }
 .diff-change-head { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; margin-bottom: 7px; }
 .diff-path { min-width: 0; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 10px; overflow-wrap: anywhere; }
-.diff-type { padding: 2px 6px; border-radius: var(--radius-pill); color: var(--color-sienna-brown); background: var(--color-blush-peach); font-size: 9px; }
+.diff-type { padding: 2px 6px; border-radius: var(--radius-pill); color: var(--color-sienna-brown); background: var(--color-accent-surface); font-size: 9px; }
 .diff-values { display: grid; grid-template-columns: minmax(0, 1fr); gap: 7px; }
 .diff-value { min-width: 0; }
 .diff-value > span { display: block; margin-bottom: 3px; color: var(--color-ash-gray); font-size: 9px; letter-spacing: .05em; text-transform: uppercase; }
@@ -1990,7 +2042,7 @@ textarea::placeholder { color: var(--color-smoke-gray); }
     min-height: 100dvh;
     padding: 0;
     border: 0;
-    background: rgba(23, 25, 28, .28);
+    background: rgba(0, 0, 0, .68);
     backdrop-filter: blur(2px);
   }
   .topbar {
@@ -2012,7 +2064,7 @@ textarea::placeholder { color: var(--color-smoke-gray); }
     padding: 5px;
     border: 1px solid var(--color-hairline);
     border-radius: var(--radius-pill);
-    background: rgba(255, 255, 255, .94);
+    background: rgba(255, 255, 255, .06);
     box-shadow: 0 8px 24px rgba(0, 0, 0, .08);
     backdrop-filter: blur(14px);
   }
