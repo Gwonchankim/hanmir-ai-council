@@ -661,7 +661,7 @@ async function verifyWorkflowVisualization(client) {
     label: document.querySelector('#workflowFollowLabel').textContent,
   }))()`);
   assert.equal(follow.pressed, 'false', 'manual workflow scrolling must pause auto-follow');
-  assert.match(follow.label, /현재 단계로 이동/);
+  assert.match(follow.label, /자동 추적 꺼짐/);
 
   await client.evaluate("document.querySelector('#workflowFollow').click()");
   follow = await client.evaluate(`(() => ({
@@ -669,7 +669,19 @@ async function verifyWorkflowVisualization(client) {
     label: document.querySelector('#workflowFollowLabel').textContent,
   }))()`);
   assert.equal(follow.pressed, 'true');
-  assert.match(follow.label, /자동 추적/);
+  assert.match(follow.label, /자동 추적 켜짐/);
+
+  // aria-pressed 토글은 눌린 상태를 해제할 수 있어야 한다.
+  // (예전에는 클릭이 항상 true로만 설정해 버튼으로는 끌 수 없었다)
+  await client.evaluate("document.querySelector('#workflowFollow').click()");
+  follow = await client.evaluate(`(() => ({
+    pressed: document.querySelector('#workflowFollow').getAttribute('aria-pressed'),
+    label: document.querySelector('#workflowFollowLabel').textContent,
+  }))()`);
+  assert.equal(follow.pressed, 'false', 'clicking a pressed toggle must turn auto-follow off');
+  assert.match(follow.label, /자동 추적 꺼짐/);
+
+  await client.evaluate("document.querySelector('#workflowFollow').click()");
 }
 
 async function verifyDisclosureAccessibility(client) {

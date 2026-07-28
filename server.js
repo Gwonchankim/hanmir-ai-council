@@ -3,6 +3,7 @@
 const express = require('express');
 const path = require('path');
 const fs = require('fs');
+const zlib = require('zlib');
 const config = require('./config');
 const defaultStore = require('./state');
 const defaultEngine = require('./engine');
@@ -15,6 +16,9 @@ const {
   isLoopback,
   normalizeAccessPolicy,
 } = require('./lib/access-security');
+
+// 작은 응답은 gzip 헤더·CPU가 이득보다 커서 그대로 보낸다.
+const GZIP_MIN_BYTES = 2048;
 
 function preflight() {
   const result = {};
@@ -59,6 +63,32 @@ function createApp({
   app.disable('x-powered-by');
   app.set('trust proxy', false);
   app.use(express.json({ limit: config.limits.requestBytes }));
+
+  // 상태 응답은 대화록을 통째로 담아 수백 KB에 이른다(실측 565KB). JSON은 압축률이
+  // 높아 gzip만 얹어도 전송량이 한 자릿수 %로 떨어진다. 외부 의존성을 늘리지 않도록
+  // 내장 zlib을 쓰고, SSE는 청크가 즉시 나가야 하므로 대상에서 제외한다
+  // (스트림은 res.json을 거치지 않는다).
+  app.use((req, res, next) => {
+    if (!/\bgzip\b/.test(String(req.headers['accept-encoding'] || ''))) return next();
+    const originalJson = res.json.bind(res);
+    res.json = (body) => {
+      let text;
+      try { text = JSON.stringify(body); } catch (_) { return originalJson(body); }
+      if (typeof text !== 'string' || Buffer.byteLength(text, 'utf8') < GZIP_MIN_BYTES) {
+        return originalJson(body);
+      }
+      zlib.gzip(text, (error, buffer) => {
+        if (error) return originalJson(body);
+        res.setHeader('Content-Type', 'application/json; charset=utf-8');
+        res.setHeader('Content-Encoding', 'gzip');
+        res.setHeader('Content-Length', String(buffer.length));
+        res.setHeader('Vary', [res.getHeader('Vary'), 'Accept-Encoding'].filter(Boolean).join(', '));
+        return res.end(buffer);
+      });
+      return res;
+    };
+    return next();
+  });
 
   app.use((req, res, next) => {
     if (req.path === '/stream' || req.path.startsWith('/api/')) {

@@ -4,12 +4,18 @@
   --color-paper-white: #ffffff;
   --color-mist-gray: #f2f2f3;
   --color-fog-white: #fafafb;
-  --color-slate-gray: #777b86;
-  --color-ash-gray: #979799;
-  --color-smoke-gray: #a3a6af;
+  /* 회색 텍스트 3종은 WCAG AA(4.5:1)를 실제 배경(paper/mist/fog, peach 라디얼 합성 포함)
+     기준으로 통과하도록 조정했다. Steep의 차분한 쿨그레이 색상(色相)은 유지하고
+     명도만 낮췄으며, slate > ash 순의 톤 위계도 그대로 남긴다. */
+  --color-slate-gray: #5f636d;
+  --color-ash-gray: #6a6d76;
+  --color-smoke-gray: #71757f;
   --color-blush-peach: #fbe1d1;
   --color-sienna-brown: #5d2a1a;
+  /* 장식용 구분선 전용(비의미 요소이므로 3:1 대상 아님) */
   --color-hairline: #ececec;
+  /* 폼·버튼 경계 전용. 1.4.11(비텍스트 대비) 3:1을 만족한다. */
+  --color-field-edge: #878a93;
 
   --font-signifier: "Source Serif 4", "Iowan Old Style", "Palatino Linotype", Georgia, ui-serif, serif;
   --font-sohne: Pretendard, Inter, "Noto Sans KR", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -197,7 +203,7 @@ button { color: inherit; }
   min-height: 40px;
   padding: 0;
   place-items: center;
-  border: 1px solid var(--color-hairline);
+  border: 1px solid var(--color-field-edge);
   border-radius: var(--radius-pill);
   background: var(--color-paper-white);
   cursor: pointer;
@@ -238,7 +244,7 @@ button { color: inherit; }
   min-width: 0;
   height: 38px;
   min-height: 38px;
-  border: 1px solid var(--color-hairline);
+  border: 1px solid var(--color-field-edge);
   border-radius: var(--radius-pill);
   color: var(--color-ink-black);
   background: var(--color-paper-white);
@@ -291,7 +297,14 @@ button { color: inherit; }
 }
 
 .session-item:hover { background: var(--color-mist-gray); }
-.session-item[aria-current="true"] { background: var(--color-paper-white); box-shadow: 0 0 0 1px var(--color-hairline); }
+/* 현재 세션 표시. paper-on-fog 배경 대비는 1.04:1이라 배경색만으로는 식별이 불가능하다.
+   좌측 3px sienna 바(inset box-shadow라 레이아웃 이동 없음)와 굵은 제목을 함께 써서
+   색에만 의존하지 않도록 한다. */
+.session-item[aria-current="true"] {
+  background: var(--color-paper-white);
+  box-shadow: inset 3px 0 0 0 var(--color-sienna-brown), 0 0 0 1px var(--color-hairline);
+}
+.session-item[aria-current="true"] .session-item-copy strong { font-weight: 560; }
 .session-item[data-archived="true"] { border-color: var(--color-hairline); color: var(--color-slate-gray); }
 
 .session-open {
@@ -321,7 +334,7 @@ button { color: inherit; }
 .session-action {
   min-height: 28px;
   padding: 3px 9px;
-  border: 1px solid var(--color-hairline);
+  border: 1px solid var(--color-field-edge);
   border-radius: var(--radius-pill);
   color: var(--color-slate-gray);
   background: var(--color-paper-white);
@@ -631,7 +644,7 @@ button { color: inherit; }
 select,
 textarea {
   width: 100%;
-  border: 1px solid var(--color-hairline);
+  border: 1px solid var(--color-field-edge);
   border-radius: var(--radius-input);
   color: var(--color-ink-black);
   background: var(--color-paper-white);
@@ -680,7 +693,7 @@ textarea::placeholder { color: var(--color-smoke-gray); }
   }
   .setup-action-button:hover:not(:disabled) { transform: translateY(-1px); }
   .setup-action-button:active:not(:disabled) { transform: translateY(0); }
-  .setup-action-button:focus-visible { outline: 3px solid color-mix(in srgb, var(--color-sienna-brown) 45%, transparent); outline-offset: 3px; }
+  /* 로컬 포커스링 제거: sienna 45%는 mist 위에서 2.43:1로 전역 규칙(ink 2px, 15.74:1)보다 나빴다. */
   .setup-action-button:disabled { opacity: .42; cursor: not-allowed; }
   .setup-action-button-secondary { color: var(--color-ink-black); background: var(--color-paper-white); }
   .setup-action-button-secondary:hover:not(:disabled) { background: var(--color-mist-gray); }
@@ -719,7 +732,7 @@ textarea::placeholder { color: var(--color-smoke-gray); }
     gap: 6px;
     min-height: 32px;
     padding: 0 11px;
-    border: 1px solid var(--color-hairline);
+    border: 1px solid var(--color-field-edge);
     border-radius: var(--radius-pill);
     color: var(--color-ink-black);
     background: var(--color-paper-white);
@@ -1025,7 +1038,7 @@ textarea::placeholder { color: var(--color-smoke-gray); }
   align-items: center;
   gap: 8px;
   padding: 0 14px;
-  border: 1px solid var(--color-hairline);
+  border: 1px solid var(--color-field-edge);
   border-radius: var(--radius-pill);
   color: var(--color-slate-gray);
   background: var(--color-paper-white);

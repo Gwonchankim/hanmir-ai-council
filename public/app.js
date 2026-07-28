@@ -986,8 +986,8 @@ function setWorkflowFollow(enabled) {
   ui.workflowFollow?.setAttribute('aria-pressed', String(app.workflowFollowEnabled));
   if (ui.workflowFollowLabel) {
     ui.workflowFollowLabel.textContent = app.workflowFollowEnabled
-      ? '현재 단계 자동 추적'
-      : '현재 단계로 이동';
+      ? '자동 추적 켜짐'
+      : '자동 추적 꺼짐';
   }
 }
 
@@ -1743,16 +1743,19 @@ function updateControls() {
     ui.actionTitle.textContent = 'Council 실행 중';
     ui.actionDescription.textContent = '현재 단계를 마칠 때까지 입력이 잠깁니다.';
     ui.inputLabel.textContent = '입력 잠김';
+    ui.input.placeholder = '현재 단계가 끝나면 입력할 수 있습니다.';
     setSendButtonLabel('실행 중', '…');
   } else if (failed) {
     ui.actionTitle.textContent = app.phase === 'interrupted' ? '실행 중단' : '실행 실패';
     ui.actionDescription.textContent = '완료된 결과를 보존한 채 실패 단계부터 재시도할 수 있습니다.';
     ui.inputLabel.textContent = '입력 잠김';
+    ui.input.placeholder = '재시도하거나 새 세션을 시작하세요.';
     setSendButtonLabel('입력 불가', '×');
   } else if (terminal) {
     ui.actionTitle.textContent = decisionCouncil ? 'Council 판단 승인 완료' : 'MVP 기획 루프 완료';
     ui.actionDescription.textContent = '새로운 작업은 새 세션으로 시작하세요.';
     ui.inputLabel.textContent = '승인 완료';
+    ui.input.placeholder = '승인된 세션입니다. 새 세션에서 이어가세요.';
     setSendButtonLabel('완료', '✓');
   } else if (feedbackPhase || app.feedbackMode) {
     ui.actionTitle.textContent = app.requiredQuestions.length
@@ -1779,7 +1782,11 @@ function updateControls() {
   if (!busy && app.harnessDirty.size) {
     ui.sendBtn.disabled = true;
     ui.actionTitle.textContent = 'Harness 저장 필요';
-    ui.actionDescription.textContent = '오른쪽에서 수정한 Harness를 저장하면 다음 지시부터 적용됩니다.';
+    // 좁은 화면에서는 인스펙터 패널이 display:none + inert라 "오른쪽"이 존재하지
+    // 않는다. 전송이 잠긴 이유를 찾을 수 없게 되므로 화면 폭에 맞는 경로를 안내한다.
+    ui.actionDescription.textContent = isMobileWorkspace()
+      ? '저장하지 않은 Harness 수정이 있습니다. 인사이트 탭에서 저장하면 다음 지시부터 적용됩니다.'
+      : '오른쪽 패널에서 수정한 Harness를 저장하면 다음 지시부터 적용됩니다.';
     setSendButtonLabel('Harness를 먼저 저장하세요', '•');
   }
   updateHarnessHistoryControls();
@@ -2104,6 +2111,25 @@ function normalizeHarness(raw, role) {
     updatedBy: textFrom(value.updatedBy || value.updated_by || value.author || ''),
     reason: textFrom(value.reason || value.changeReason || value.change_reason || ''),
   };
+}
+
+// SSE로 재연결하면 과거 harness 이벤트가 모두 리플레이된다. 이벤트 하나마다 전체
+// 상태를 다시 받던 탓에 초기 로드에서만 /api/state(실측 565KB)가 12번 오갔다.
+// 하네스 전용 엔드포인트(13KB)로 좁히고, 리플레이 버스트는 한 번으로 합친다.
+let harnessRefreshQueued = false;
+function scheduleHarnessRefresh() {
+  if (harnessRefreshQueued) return;
+  harnessRefreshQueued = true;
+  setTimeout(() => {
+    harnessRefreshQueued = false;
+    requestJson('/api/harnesses').then((payload) => {
+      if (app.state && payload?.harnesses) {
+        app.state.harnesses = payload.harnesses;
+        if (payload.revision !== undefined) app.state.harnessRevision = payload.revision;
+      }
+      renderHarnesses(payload, false);
+    }).catch(() => {});
+  }, 0);
 }
 
 function extractHarnesses(source = {}) {
@@ -3106,7 +3132,10 @@ function syncArtifactFilterToPhase() {
 function addActivity(event, text) {
   const content = textFrom(text).trim();
   if (!content) return;
-  setTicker(content, false);
+  // 재연결하면 서버가 과거 이벤트를 전부 replay한다. 이미 끝난 세션에서 그 백로그가
+  // 티커를 덮으면 "승인 완료" pill 옆에 옛 진행 메시지가 남아 서로 모순된다.
+  // 실행 중일 때만 진행 문구로 갱신하고, 그 외에는 상태 문구를 지킨다.
+  if (BUSY_PHASES.has(app.phase)) setTicker(content, false);
   const key = event.fallback || event.circuit
     ? `exception:${event.id || hash(content)}`
     : `${event.cycle || 0}:${event.phase || ''}:${event.logicalRole || event.role || ''}:${event.artifactType || ''}`;
@@ -3150,10 +3179,7 @@ function handleEvent(event, messageEvent = null) {
   const declaredArtifactType = String(event.artifactType || event.artifact_type || '').toLowerCase();
 
   if (kind === 'config' && declaredArtifactType.includes('harness')) {
-    requestJson('/api/state').then((latest) => {
-      app.state = latest;
-      renderHarnesses(latest, false);
-    }).catch(() => {});
+    scheduleHarnessRefresh();
   }
 
   if (kind === 'error' || kind === 'run.failed' || kind === 'run_failed') {
@@ -4021,8 +4047,11 @@ ui.artifactReader?.addEventListener('click', (event) => {
   else ui.artifactReader.removeAttribute('open');
 });
 ui.workflowFollow?.addEventListener('click', () => {
-  setWorkflowFollow(true);
-  followWorkflowTarget(app.workflowTarget, true);
+  // aria-pressed 토글 버튼인데 항상 true로 두면 눌린 상태를 해제할 수 없다.
+  // (이전에는 wheel/touch 같은 숨은 제스처로만 끌 수 있었다)
+  const next = !app.workflowFollowEnabled;
+  setWorkflowFollow(next);
+  if (next) followWorkflowTarget(app.workflowTarget, true);
 });
 ui.workflowViewport?.addEventListener('wheel', () => setWorkflowFollow(false), { passive: true });
 ui.workflowViewport?.addEventListener('touchstart', () => setWorkflowFollow(false), { passive: true });
