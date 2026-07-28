@@ -27,6 +27,9 @@ const ui = {
   globalErrorText: byId('globalErrorText'),
   globalErrorDismiss: byId('globalErrorDismiss'),
   sessionOrderToggle: byId('sessionOrderToggle'),
+  sessionHeadline: byId('sessionHeadline'),
+  sessionHeadlineTitle: byId('sessionHeadlineTitle'),
+  sessionHeadlineMeta: byId('sessionHeadlineMeta'),
   roundValue: byId('roundValue'),
   cycleValue: byId('cycleValue'),
   planVersionValue: byId('planVersionValue'),
@@ -3289,6 +3292,30 @@ function resetRendered() {
   ['orchestrator', 'claude', 'codex'].forEach(renderRoleSummary);
 }
 
+// 지금 이 세션이 무엇을 만들고 있는지 한 줄로 세운다.
+// 세션 제목은 첫 지시문의 앞부분이라 산출물이 드러나지 않는 경우가 많다
+// (예: "추가 필수 질문 답변: [Q-VALUE] …"). 기획안 제목이 실제 목표물을 담고
+// 있으므로 그것을 우선 쓰고, 아직 없을 때만 세션 제목으로 물러선다.
+function renderSessionHeadline(state = {}) {
+  if (!ui.sessionHeadline) return;
+  const plan = state.currentPlan || state.current_plan || {};
+  const objective = textFrom(plan.title).trim() || textFrom(state.sessionTitle).trim();
+  if (!objective) {
+    ui.sessionHeadline.hidden = true;
+    return;
+  }
+  ui.sessionHeadlineTitle.textContent = objective;
+  const phase = PHASE_LABELS[normalizePhase(state.phase)] || state.phase || '';
+  const cycle = Number(state.cycle) || 0;
+  const version = plan.planVersion ?? state.planVersion;
+  ui.sessionHeadlineMeta.textContent = [
+    cycle ? `Cycle ${cycle}` : '',
+    version ? `Plan v${version}` : '',
+    phase,
+  ].filter(Boolean).join(' · ');
+  ui.sessionHeadline.hidden = false;
+}
+
 function renderState(state, reset = true) {
   const priorSessionId = app.activeSessionId;
   const nextSessionId = state.sessionId || state.session_id || state.sessionKey || priorSessionId;
@@ -3302,6 +3329,7 @@ function renderState(state, reset = true) {
   app.workflowReplay = true;
   setPhase(state.phase || state.status || 'ready');
   updateMeta(state);
+  renderSessionHeadline(state);
   applyArtifactFilter();
   const questions = extractQuestions(state);
   renderQuestions(questions.required, questions.optional);

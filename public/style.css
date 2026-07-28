@@ -498,7 +498,9 @@ body[data-session-order="edit"] .session-actions { display: none; }
   letter-spacing: -.04em;
 }
 
-.brand-block h1 em { font-weight: 400; }
+/* Dala는 위계를 스케일과 트래킹으로만 만든다. 이탤릭은 Steep 세리프 시절의
+   표현이라 기울기를 빼고 강조는 크기·자간에 맡긴다. */
+.brand-block h1 em { font-style: normal; font-weight: 400; }
 
 .brand-subtitle {
   margin: 8px 0 0;
@@ -606,6 +608,32 @@ body[data-session-order="edit"] .session-actions { display: none; }
   background: var(--color-ink-black);
   box-shadow: var(--shadow-popover);
   font-size: 14px;
+}
+
+/* 현재 목표물. Dala의 "섹션 헤드라인 블록"을 따른다 -- 박스도 보더도 없이
+   앰버 라벨 + 큰 흰 제목이 void 위에 그대로 놓인다. */
+.session-headline {
+  width: min(1680px, calc(100% - 48px));
+  margin: 0 auto var(--spacing-20);
+}
+.session-headline[hidden] { display: none; }
+.session-headline h2 {
+  margin: 6px 0 0;
+  color: var(--color-bone-white);
+  font-size: clamp(22px, 2.4vw, 34px);
+  font-weight: 400;
+  line-height: 1.18;
+  letter-spacing: -.03em;
+  /* 산출물 제목에는 "HM-ThermaShield" 같은 긴 영문 토큰이 들어간다.
+     좁은 화면에서 가로 스크롤을 만들지 않도록 강제로 접는다. */
+  overflow-wrap: anywhere;
+}
+.session-headline .tag-label { color: var(--color-saffron-spark); }
+.session-headline-meta {
+  margin: 8px 0 0;
+  color: var(--color-slate-gray);
+  font-size: 12px;
+  letter-spacing: .01em;
 }
 
 .setup-panel {
@@ -2103,6 +2131,7 @@ textarea::placeholder { color: var(--color-smoke-gray); }
   body[data-mobile-view="sessions"] #inspectorPanel { display: none; }
   body[data-mobile-view="insights"] #councilConversationPanel { display: none; }
   body[data-mobile-view="insights"] #inspectorPanel { display: block; }
+  .session-headline,
   .setup-panel,
   .workspace-grid,
   .global-error { width: min(100% - 24px, 1680px); }
@@ -2150,6 +2179,7 @@ textarea::placeholder { color: var(--color-smoke-gray); }
 
 @media (max-width: 640px) {
   .topbar,
+  .session-headline,
   .setup-panel,
   .workspace-grid,
   .global-error { width: min(100% - 24px, 1680px); }
