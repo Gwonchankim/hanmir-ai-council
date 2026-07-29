@@ -45,6 +45,8 @@
 
         <div class="rail-section-head rail-label">
           <span>Sessions</span>
+          <button type="button" id="sessionOrderToggle" class="session-action session-order-toggle"
+                  aria-pressed="false" aria-controls="sessionList">순서 수정</button>
           <span id="sessionCount" class="rail-count">0</span>
         </div>
         <nav id="sessionList" class="session-list" aria-label="저장된 채팅 세션">
@@ -76,6 +78,7 @@
                   data-remote-mode="local" data-testid="remote-mode-status">로컬 전용</span>
           </div>
           <span id="phasePill" class="phase-pill" data-phase="ready">준비</span>
+          <span id="phaseElapsed" class="phase-elapsed" aria-live="off" hidden></span>
           <dl class="run-meta">
             <div><dt>Round</dt><dd id="roundValue">0</dd></div>
             <div><dt>Cycle</dt><dd id="cycleValue">0</dd></div>
@@ -84,7 +87,10 @@
         </div>
       </header>
 
-      <div id="globalError" class="global-error hidden" role="alert" tabindex="-1"></div>
+      <div id="globalError" class="global-error hidden" role="alert" tabindex="-1">
+        <span id="globalErrorText"></span>
+        <button type="button" id="globalErrorDismiss" class="global-error-dismiss" aria-label="오류 알림 닫기">✕</button>
+      </div>
 
       <nav id="mobileWorkspaceNav" class="mobile-workspace-nav" aria-label="모바일 작업 영역" role="tablist">
         <button id="mobileSessionsTab" class="mobile-workspace-tab" type="button" role="tab"
@@ -100,6 +106,12 @@
           <span aria-hidden="true">◇</span><span>인사이트</span>
         </button>
       </nav>
+
+      <section id="sessionHeadline" class="session-headline" aria-labelledby="sessionHeadlineTitle" hidden>
+        <p class="tag-label">Current objective</p>
+        <h2 id="sessionHeadlineTitle"></h2>
+        <p id="sessionHeadlineMeta" class="session-headline-meta"></p>
+      </section>
 
       <section class="setup-panel" aria-labelledby="setupTitle">
         <div class="section-heading">
@@ -250,7 +262,7 @@
       </section>
 
       <div class="workspace-grid">
-        <div id="councilConversationPanel" class="conversation-column" role="tabpanel" aria-labelledby="mobileChatTab">
+        <div id="councilConversationPanel" class="conversation-column" role="tabpanel" aria-labelledby="mobileChatTab" data-desktop-label="Council 대화와 진행 상황">
           <main id="councilWorkspace" class="workspace" tabindex="-1">
             <section class="user-stream" aria-labelledby="userStreamTitle">
               <div class="lane-heading user-heading">
@@ -263,7 +275,7 @@
                 </div>
                 <span id="userCount" class="message-count" aria-label="사용자 메시지 수">0</span>
               </div>
-              <div id="userMessages" class="user-messages" aria-live="polite">
+              <div id="userMessages" class="user-messages" aria-live="polite" tabindex="0" role="group" aria-label="보낸 지시 목록 (스크롤 가능)">
                 <p class="empty-state">아직 입력한 지시가 없습니다.</p>
               </div>
             </section>
@@ -274,7 +286,7 @@
                 <h2 id="activityTitle">현재 진행</h2>
                 <p id="ticker" role="status" aria-live="polite">세션 설정 후 지시를 입력하세요.</p>
               </div>
-              <ol id="activityLog" class="activity-log" aria-label="단계 기록"></ol>
+              <ol id="activityLog" class="activity-log" aria-label="단계 기록 (스크롤 가능)" tabindex="0"></ol>
             </section>
 
             <section id="workflowPanel" class="workflow-panel" aria-labelledby="workflowTitle">
@@ -295,7 +307,10 @@
 
               <div id="workflowViewport" class="workflow-viewport" tabindex="0"
                    aria-label="현재 Council 실행 Workflow">
-                <div id="workflowCycles" class="workflow-cycles" aria-live="polite"></div>
+                <!-- aria-live 없음: 이 컨테이너는 이벤트마다 replaceChildren으로 전체가
+                     새로 만들어져, live 영역으로 두면 Cycle 전체가 매번 다시 낭독된다.
+                     단계 전환 알림은 role="status"인 #ticker가 담당한다. -->
+                <div id="workflowCycles" class="workflow-cycles"></div>
                 <div class="workflow-track hidden" aria-hidden="true">
                   <div id="workflowIngress" class="workflow-ingress" aria-hidden="true">
                     <span>사용자 요청</span>
@@ -313,7 +328,7 @@
                       <span id="orchestratorCount" class="message-count" aria-label="Orchestrator 메시지 수">0</span>
                     </header>
                     <p id="workflowOrchestratorStatus" class="workflow-node-status" role="status">사용자 지시를 기다리고 있습니다.</p>
-                    <div id="orchestratorMessages" class="lane-messages workflow-node-messages" aria-live="polite">
+                    <div id="orchestratorMessages" class="lane-messages workflow-node-messages">
                       <p class="empty-state">과업 분해와 Agent 전달 내용이 이곳에 표시됩니다.</p>
                     </div>
                   </article>
@@ -339,7 +354,7 @@
                         <span id="claudeCount" class="message-count" aria-label="Claude 메시지 수">0</span>
                       </header>
                       <p id="workflowClaudeStatus" class="workflow-node-status" role="status">대기 중</p>
-                      <div id="claudeMessages" class="lane-messages workflow-node-messages" aria-live="polite">
+                      <div id="claudeMessages" class="lane-messages workflow-node-messages">
                         <p class="empty-state">Claude의 현재 작업과 공개 결과가 표시됩니다.</p>
                       </div>
                     </article>
@@ -355,7 +370,7 @@
                         <span id="codexCount" class="message-count" aria-label="ChatGPT 메시지 수">0</span>
                       </header>
                       <p id="workflowCodexStatus" class="workflow-node-status" role="status">대기 중</p>
-                      <div id="codexMessages" class="lane-messages workflow-node-messages" aria-live="polite">
+                      <div id="codexMessages" class="lane-messages workflow-node-messages">
                         <p class="empty-state">ChatGPT의 현재 작업과 공개 결과가 표시됩니다.</p>
                       </div>
                     </article>
@@ -381,7 +396,7 @@
                       <span class="workflow-return-badge">Final</span>
                     </header>
                     <p id="workflowReturnStatus" class="workflow-node-status" role="status">Agent 결과를 기다리고 있습니다.</p>
-                    <div id="orchestratorReturnMessages" class="lane-messages workflow-node-messages" aria-live="polite">
+                    <div id="orchestratorReturnMessages" class="lane-messages workflow-node-messages">
                       <p class="empty-state">Agent 결과가 돌아오면 통합 판단이 이곳에 생성됩니다.</p>
                     </div>
                   </article>
@@ -392,8 +407,8 @@
             <section id="artifactSection" class="artifact-section hidden" aria-labelledby="artifactTitle">
               <div class="section-heading artifact-heading">
                 <div>
-                  <p class="eyebrow">Validated output</p>
-                  <h2 id="artifactTitle">구조화 산출물</h2>
+                  <p class="eyebrow">Decision output</p>
+                  <h2 id="artifactTitle">결과 검토</h2>
                 </div>
                 <div class="artifact-tools">
                   <label for="artifactFilter" class="sr-only">산출물 표시 범위</label>
@@ -454,6 +469,7 @@
         </div>
 
         <aside id="inspectorPanel" class="inspector-panel" aria-label="Council 수행 기록과 Harness"
+               data-desktop-label="Council 수행 기록과 Harness"
                role="tabpanel" aria-labelledby="mobileInsightsTab" tabindex="-1">
           <div class="inspector-head">
             <div><p class="eyebrow">Council record</p><h2>Work ledger</h2></div>
@@ -569,6 +585,26 @@
       </div>
     </div>
   </div>
+
+  <dialog id="artifactReader" class="artifact-reader" aria-labelledby="artifactReaderTitle">
+    <article class="artifact-reader-shell">
+      <header class="artifact-reader-head">
+        <div>
+          <p id="artifactReaderType" class="eyebrow">Result reader</p>
+          <h2 id="artifactReaderTitle">결과 읽기</h2>
+          <p id="artifactReaderMeta" class="artifact-reader-meta"></p>
+        </div>
+        <button id="closeArtifactReader" class="button ghost compact" type="button">닫기</button>
+      </header>
+      <div id="artifactReaderProvenance" class="artifact-provenance artifact-reader-provenance" aria-label="산출물 출처"></div>
+      <div id="artifactReaderBody" class="artifact-reader-body" tabindex="0" role="group" aria-label="산출물 본문 (스크롤 가능)"></div>
+      <details class="artifact-raw">
+        <summary>원문 구조 보기</summary>
+        <p class="helper-text">검증·감사용 내부 구조입니다. 업무 결과 검토에는 위 요약을 사용하세요.</p>
+        <div id="artifactReaderRaw" class="artifact-raw-body" tabindex="0" role="group" aria-label="원본 JSON (스크롤 가능)"></div>
+      </details>
+    </article>
+  </dialog>
 
   <script src="/app.js" defer></script>
 </body>

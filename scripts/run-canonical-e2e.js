@@ -125,9 +125,18 @@ function createPromptEvidenceCollector() {
     return ['orchestrator', 'claudeWorker', 'codexWorker'].map((role) => {
       const expectedMarkdown = roleToMarkdown(harnessSet[role]);
       const expectedDigest = digestText(expectedMarkdown);
-      const candidates = observations.filter((item) => item.cycle === cycle.number && item.role === role);
-      const matching = candidates.find((item) => item.prompt.includes(expectedMarkdown));
-      const selected = matching || candidates[0];
+      const roleCandidates = observations.filter((item) => item.role === role);
+      const parsedCycleCandidates = roleCandidates.filter((item) => item.cycle === cycle.number);
+      // cycle 귀속을 promptCycle 텍스트 파싱에만 맡기지 않는다. LLM이 설계한 하네스
+      // 본문에 "cycle-1" 같은 표현이 실제 anchor보다 먼저 나오면 첫-매칭 파싱이
+      // 관찰을 엉뚱한 cycle 버킷으로 보내, 전송 내용이 완벽히 일치하는 실행에서도
+      // 증거가 사라진다(실측: 비결정 게이트 실패의 원인). 이 cycle에 고정된 하네스
+      // markdown은 revision마다 내용이 달라지므로, "그 내용이 실제 전송 텍스트에
+      // 포함되었는가" 자체가 가장 강한 cycle 귀속이다. 판정은 여전히 관찰된 실제
+      // 프롬프트 텍스트만 근거로 삼는다(엔진의 자기 기록에 의존하지 않음).
+      const matching = parsedCycleCandidates.find((item) => item.prompt.includes(expectedMarkdown))
+        || roleCandidates.find((item) => item.prompt.includes(expectedMarkdown));
+      const selected = matching || parsedCycleCandidates[0];
       if (!selected && state) {
         const persisted = persistedPromptBinding(state, cycle, role, expectedMarkdown, expectedDigest);
         if (persisted) return persisted;
@@ -725,11 +734,35 @@ async function main() {
   } finally {
     engine.brainCaller = originalBrainCaller;
     app.locals.closeStreams();
-    await new Promise((resolve) => server.close(resolve));
+    // SSE 응답이 하나라도 살아 있으면 server.close()의 콜백이 오지 않아 이 await가
+    // 영원히 pending 상태가 된다. 그러면 프로세스가 종료되지 못하고 매달리고,
+    // 실행기가 죽이면서 실패가 exit 0으로 집계된다. 연결을 강제로 끊고,
+    // 그래도 닫히지 않으면 기다리지 않는다.
+    server.closeAllConnections?.();
+    await Promise.race([
+      new Promise((resolve) => server.close(resolve)),
+      new Promise((resolve) => setTimeout(resolve, 2_000)),
+    ]);
   }
 }
 
-if (require.main === module) main();
+// 실패는 반드시 종료 코드로 드러나야 한다.
+// process.exitCode만 설정하면 정리 단계에 남은 핸들이나 삼켜진 예외 때문에 그 값이
+// 종료까지 살아남지 못하는 경우가 있었다. 실제로 증거 게이트가 실패했는데도 exit 0이
+// 보고되어, CI에 걸었다면 통과로 집계됐을 상황이었다. 명시적으로 끝낸다.
+function runAsScript(entry) {
+  const fail = (error) => {
+    process.stderr.write(`${error?.stack || error}\n`);
+    process.exit(1);
+  };
+  process.on('unhandledRejection', fail);
+  process.on('uncaughtException', fail);
+  entry()
+    .then(() => process.exit(process.exitCode || 0))
+    .catch(fail);
+}
+
+if (require.main === module) runAsScript(main);
 
 module.exports = {
   HARNESS_OVERRIDE_TEXT,

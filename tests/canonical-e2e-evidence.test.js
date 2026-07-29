@@ -90,6 +90,34 @@ test('prompt evidence collector proves pinned role Harnesses without persisting 
   assert.doesNotMatch(JSON.stringify(bindings), /Active task harness|Complete the assigned/);
 });
 
+test('하네스 본문의 다른 cycle 언급이 관찰 귀속을 깨뜨리지 못한다', () => {
+  // 실측 재현: LLM이 설계한 하네스 본문에 "cycle-1 structure" 같은 표현이 실제
+  // anchor보다 먼저 나오면 promptCycle 첫-매칭 파싱이 관찰을 cycle 1로 오귀속했고,
+  // 전송 내용이 완벽히 일치하는 실행에서도 게이트가 비결정적으로 실패했다.
+  const set = harnessSet(2, 'Preserve already accepted cycle-1 structure unless the delta requires change.');
+  const prompt = observedPrompt('claudeWorker', set.claudeWorker, 2);
+  // 오파싱이 실제로 일어나는 입력임을 고정한다(픽스처가 바뀌어 전제가 무너지면 여기서 잡힌다).
+  assert.equal(promptCycle(prompt), 1);
+
+  const collector = createPromptEvidenceCollector();
+  collector.observe({ prompt, schema: { $id: 'Draft' } });
+  const cycle = { number: 2, harnessRevision: 3, artifacts: { harnessSet: set } };
+  const binding = collector.promptBindingsForCycle(cycle).find((item) => item.role === 'claudeWorker');
+  // 이 cycle에 고정된 하네스 내용이 전송 텍스트에 실제로 포함되어 있으므로 증거로 인정된다.
+  assert.equal(binding.included, true);
+  assert.equal(binding.promptHarnessDigest, binding.harnessDigest);
+
+  // 게이트 무력화 방지: 하네스 본문이 빠진 프롬프트만 관찰되면 여전히 실패해야 한다.
+  const empty = createPromptEvidenceCollector();
+  empty.observe({
+    prompt: 'Active task harness for claudeWorker. cycle은 반드시 2로 기록한다.',
+    schema: { $id: 'Draft' },
+  });
+  const missing = empty.promptBindingsForCycle(cycle).find((item) => item.role === 'claudeWorker');
+  assert.equal(missing.included, false);
+  assert.equal(missing.promptHarnessDigest, null);
+});
+
 test('user override proof targets the next role call and stores only its digest', () => {
   const collector = createPromptEvidenceCollector();
   const override = [

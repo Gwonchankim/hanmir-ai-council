@@ -8,7 +8,7 @@ const path = require('path');
 const config = require('../config');
 const { PlanningEngine } = require('../engine');
 const { StateStore } = require('../state');
-const { isFallbackEligible, routeChain } = require('../lib/model-router');
+const { isFallbackEligible, routeChain, routeKey } = require('../lib/model-router');
 const { identityLeaks, validateAnonymousBundle } = require('../lib/council-anonymity');
 
 function fixtureStore(t) {
@@ -225,6 +225,37 @@ test('a provider spend limit switches the same logical role to its configured fa
   const claudeCalls = brain.calls.filter((call) => call.provider === 'claude');
   assert.equal(claudeCalls.length, 1);
   assert.equal(store.publicState().modelRouting.circuits.length, 1);
+});
+
+test('a fallback response never contaminates the brain-agnostic legacy session field', async (t) => {
+  const store = fixtureStore(t);
+  const chairRoute = { brain: 'claude', model: 'sonnet', effort: 'medium' };
+  const chairFallback = { brain: 'codex', model: 'gpt-5.4', effort: 'medium' };
+  store.configure({
+    mode: 'decision_council',
+    council: {
+      chair: { ...chairRoute, fallbacks: [chairFallback] },
+    },
+  }, { reset: false });
+  const brain = fakeCouncilBrain({ failClaudeLimit: true });
+  const engine = new PlanningEngine({ store, brainCaller: brain });
+  await engine.runDecisionCouncil('A안과 B안 중 어느 쪽이 나은가?').promise;
+
+  const state = store.get();
+  assert.equal(state.phase, 'awaiting_approval');
+  // The chair role (internal roleKey 'councilChair') fell back from claude
+  // to codex. Since the primary (routeIndex 0) route never returned a
+  // session, the brain-agnostic legacy field must stay untouched --
+  // otherwise a later call that returns to the primary route would try to
+  // resume using a session ID that belongs to the other brain.
+  assert.equal(state.sessions.councilChair, undefined);
+  assert.equal(state.routeSessions.councilChair[routeKey(chairRoute)], undefined);
+  const codexSession = state.routeSessions.councilChair[routeKey(chairFallback)];
+  assert.ok(codexSession);
+  const chairAudit = state.sessionAudit.filter((entry) => entry.role === 'councilChair');
+  assert.equal(chairAudit.length, 1);
+  assert.equal(chairAudit[0].brain, 'codex');
+  assert.equal(chairAudit[0].returnedSession, codexSession);
 });
 
 test('five independent analyses are anonymized, peer-reviewed, synthesized, and reported', async (t) => {

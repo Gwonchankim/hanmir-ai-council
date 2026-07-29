@@ -23,6 +23,13 @@ const ui = {
   connectionBadge: byId('connectionBadge'),
   remoteModeBadge: byId('remoteModeBadge'),
   phasePill: byId('phasePill'),
+  phaseElapsed: byId('phaseElapsed'),
+  globalErrorText: byId('globalErrorText'),
+  globalErrorDismiss: byId('globalErrorDismiss'),
+  sessionOrderToggle: byId('sessionOrderToggle'),
+  sessionHeadline: byId('sessionHeadline'),
+  sessionHeadlineTitle: byId('sessionHeadlineTitle'),
+  sessionHeadlineMeta: byId('sessionHeadlineMeta'),
   roundValue: byId('roundValue'),
   cycleValue: byId('cycleValue'),
   planVersionValue: byId('planVersionValue'),
@@ -90,6 +97,14 @@ const ui = {
   artifactList: byId('artifactList'),
   artifactFilter: byId('artifactFilter'),
   artifactCount: byId('artifactCount'),
+  artifactReader: byId('artifactReader'),
+  artifactReaderType: byId('artifactReaderType'),
+  artifactReaderTitle: byId('artifactReaderTitle'),
+  artifactReaderMeta: byId('artifactReaderMeta'),
+  artifactReaderProvenance: byId('artifactReaderProvenance'),
+  artifactReaderBody: byId('artifactReaderBody'),
+  artifactReaderRaw: byId('artifactReaderRaw'),
+  closeArtifactReader: byId('closeArtifactReader'),
   inspectorPanel: byId('inspectorPanel'),
   expandAllInspector: byId('expandAllInspector'),
   orchestratorSummary: byId('orchestratorSummary'),
@@ -178,6 +193,45 @@ const PHASE_LABELS = {
   cancelled: '취소됨',
 };
 
+// 진행률 표시용 단계 순서. LLM 호출이 수십 초~수 분 걸리므로, 사용자가
+// "지금 몇 번째 단계인지"를 알 수 있어야 화면이 멈춘 것과 구분된다.
+const PHASE_SEQUENCE = {
+  planning: [
+    ['harnessing'],
+    ['decomposing', 'dispatching', 'dispatch'],
+    ['r0_drafting', 'drafting', 'r0'],
+    ['r1_critiquing', 'critiquing', 'r1'],
+    ['r2_revising', 'revising', 'r2'],
+    ['synthesizing', 'synthesis'],
+  ],
+  decision_council: [
+    ['framing'],
+    ['independent_analysis'],
+    ['anonymous_peer_review'],
+    ['chair_synthesis'],
+  ],
+};
+
+function phaseProgress(phase, mode) {
+  const steps = PHASE_SEQUENCE[mode === 'decision_council' ? 'decision_council' : 'planning'];
+  const index = steps.findIndex((group) => group.includes(phase));
+  return index < 0 ? null : { step: index + 1, total: steps.length };
+}
+
+// CSS의 scroll-behavior:auto는 CSS 스크롤에만 적용된다. scrollTo/scrollIntoView에
+// 넘긴 behavior 옵션이 그것을 덮어쓰므로, 축소 모션 설정에서도 부드러운 스크롤이
+// 실행된다. 워크플로 자동 추적은 이벤트마다 일어나 특히 문제가 된다.
+const REDUCED_MOTION = window.matchMedia('(prefers-reduced-motion: reduce)');
+function scrollBehavior() {
+  return REDUCED_MOTION.matches ? 'auto' : 'smooth';
+}
+
+function formatElapsed(ms) {
+  const seconds = Math.max(0, Math.round(ms / 1000));
+  if (seconds < 60) return `${seconds}초`;
+  return `${Math.floor(seconds / 60)}분 ${String(seconds % 60).padStart(2, '0')}초`;
+}
+
 const BUSY_PHASES = new Set([
   'decomposing', 'dispatch', 'dispatching', 'harnessing', 'r0_drafting', 'drafting', 'r0',
   'r1_critiquing', 'critiquing', 'r1', 'r2_revising', 'revising', 'r2',
@@ -247,6 +301,11 @@ const app = {
   workflowReplay: false,
   workflowRoleState: { orchestrator: 'idle', claude: 'idle', codex: 'idle', return: 'idle' },
   workflowEvents: [],
+  // 사용자가 직접 펼치거나 접은 Cycle만 기억한다(cycle 번호 → open 여부).
+  workflowCycleOverrides: new Map(),
+  artifactFilterTouched: false,
+  phaseStartedAt: null,
+  phaseTimer: null,
   renderedArtifacts: new Set(),
   counts: { user: 0, orchestrator: 0, claude: 0, codex: 0, artifact: 0 },
   councilRoleControls: {},
@@ -420,9 +479,13 @@ function renderAccessMode(context = app.securityContext) {
 
 function showError(message, focus = false) {
   const text = textFrom(message).trim();
-  ui.globalError.textContent = text;
+  // 배너 안에 닫기 버튼이 있으므로 컨테이너가 아니라 텍스트 노드만 갱신한다.
+  if (ui.globalErrorText) ui.globalErrorText.textContent = text;
+  else ui.globalError.textContent = text;
   ui.globalError.classList.toggle('hidden', !text);
-  if (text && focus) ui.globalError.focus();
+  // role="alert"는 이미 자동으로 낭독된다. 여기에 focus()까지 걸면 스크린리더가
+  // 같은 내용을 두 번 읽고, sticky 배너로 화면이 최상단으로 튄다.
+  if (text && focus && !ui.globalErrorText) ui.globalError.focus();
 }
 
 function setTicker(message, error = false) {
@@ -510,11 +573,42 @@ const COUNCIL_ROLE_META = Object.freeze({
   },
 });
 
+// 긴 산출물 본문(수천 px)은 접어두고 '더 읽기'로 펼친다. 짧은 본문은 그대로 둔다.
+// 25 cycle까지 허용되므로 한 세션에 수백 장이 쌓일 수 있다. 화면에 유지할 상한.
+const ARTIFACT_CARD_LIMIT = 120;
+const READ_MORE_LIMIT = 420;
+function applyReadMore(body, actions) {
+  // rAF는 탭이 백그라운드/비표시 상태면 실행되지 않으므로 타이머를 쓴다.
+  setTimeout(() => {
+    if (!body.isConnected || body.scrollHeight <= READ_MORE_LIMIT * 1.2) return;
+    body.classList.add('is-clamped');
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'artifact-more';
+    const sync = () => {
+      const clamped = body.classList.contains('is-clamped');
+      btn.textContent = clamped ? '더 읽기 ↓' : '접기 ↑';
+      btn.setAttribute('aria-expanded', String(!clamped));
+    };
+    btn.addEventListener('click', () => { body.classList.toggle('is-clamped'); sync(); });
+    sync();
+    (actions && actions.isConnected ? actions.parentNode : body.parentNode)
+      ?.insertBefore(btn, body.nextSibling);
+  }, 0);
+}
+
 function createSelect(className, labelText) {
   const label = document.createElement('label');
   label.textContent = labelText;
   const select = document.createElement('select');
   select.className = className;
+  // 좁은 카드에서 옵션 텍스트가 잘려도 hover로 전체 모델명을 확인할 수 있게 한다.
+  const syncTitle = () => {
+    const opt = select.options[select.selectedIndex];
+    select.title = opt ? opt.textContent : '';
+  };
+  select.addEventListener('change', syncTitle);
+  queueMicrotask(syncTitle);
   label.append(select);
   return { label, select };
 }
@@ -912,8 +1006,8 @@ function setWorkflowFollow(enabled) {
   ui.workflowFollow?.setAttribute('aria-pressed', String(app.workflowFollowEnabled));
   if (ui.workflowFollowLabel) {
     ui.workflowFollowLabel.textContent = app.workflowFollowEnabled
-      ? '현재 단계 자동 추적'
-      : '현재 단계로 이동';
+      ? '자동 추적 켜짐'
+      : '자동 추적 꺼짐';
   }
 }
 
@@ -1034,9 +1128,46 @@ function createWorkflowCycleNode({
   return node;
 }
 
-function workflowConnector(label, flowing = false) {
+function workflowConnector(label, state = 'idle', variant = 'linear') {
   const connector = document.createElement('div');
-  connector.className = `workflow-cycle-connector${flowing ? ' is-flowing' : ''}`;
+  const normalizedState = ['active', 'complete', 'idle'].includes(state) ? state : 'idle';
+  connector.className = `workflow-cycle-connector is-${variant} is-${normalizedState}${normalizedState === 'active' ? ' is-flowing' : ''}`;
+  connector.dataset.workflowConnector = variant;
+  connector.dataset.workflowState = normalizedState;
+  const namespace = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(namespace, 'svg');
+  svg.classList.add('workflow-connector-svg');
+  svg.setAttribute('viewBox', '0 0 1000 100');
+  svg.setAttribute('preserveAspectRatio', 'none');
+  svg.setAttribute('aria-hidden', 'true');
+  // 수직 → 짧은 라운드 코너 → 수평 → 라운드 코너 → 수직.
+  // 직각에 가깝게 꺾이되 모서리만 둥근 형태라 분기 방향이 한눈에 읽힌다.
+  // 화살촉 없이 선만으로 잇는다. 끝은 노드 경계까지 그대로 닿는다.
+  const MOBILE_PATH = 'M 500 0 V 100';
+  const paths = variant === 'split'
+    ? [
+      'M 500 0 V 26 Q 500 44, 466 44 H 284 Q 250 44, 250 62 V 100',
+      'M 500 0 V 26 Q 500 44, 534 44 H 716 Q 750 44, 750 62 V 100',
+    ]
+    : variant === 'merge'
+      ? [
+        'M 250 0 V 26 Q 250 44, 284 44 H 466 Q 500 44, 500 62 V 100',
+        'M 750 0 V 26 Q 750 44, 716 44 H 534 Q 500 44, 500 62 V 100',
+      ]
+      : [MOBILE_PATH];
+  const appendPathPair = (data, className) => {
+    const track = document.createElementNS(namespace, 'path');
+    track.classList.add('workflow-connector-track', className);
+    track.setAttribute('d', data);
+    svg.append(track);
+    const flow = document.createElementNS(namespace, 'path');
+    flow.classList.add('workflow-connector-flow', className);
+    flow.setAttribute('d', data);
+    svg.append(flow);
+  };
+  paths.forEach((data) => appendPathPair(data, 'workflow-connector-desktop-path'));
+  if (variant !== 'linear') appendPathPair(MOBILE_PATH, 'workflow-connector-mobile-path');
+  connector.append(svg);
   const copy = document.createElement('small');
   copy.textContent = label;
   connector.append(copy);
@@ -1061,7 +1192,11 @@ function renderDecisionCycleBody(container, events, phase) {
     state: frameComplete ? 'complete' : phase === 'framing' ? 'active' : 'idle',
     accent: 'orchestrator-accent',
   }));
-  container.append(workflowConnector('동일한 질문을 5개 관점에 전달', phase === 'independent_analysis'));
+  container.append(workflowConnector(
+    '동일한 질문을 5개 관점에 전달',
+    phase === 'independent_analysis' ? 'active' : frameComplete ? 'complete' : 'idle',
+    'split',
+  ));
 
   const advisorGrid = document.createElement('div');
   advisorGrid.className = 'workflow-advisor-grid';
@@ -1096,7 +1231,11 @@ function renderDecisionCycleBody(container, events, phase) {
   progress.className = 'workflow-progress-strip';
   progress.innerHTML = `<span>독립 분석 <strong>${analysisCount}/5</strong></span><span>익명 평가 <strong>${reviewCount}/5</strong></span>`;
   container.append(progress, advisorGrid);
-  container.append(workflowConnector('익명 평가 결과를 Chair에게 전달', phase === 'anonymous_peer_review' || phase === 'chair_synthesis'));
+  container.append(workflowConnector(
+    '익명 평가 결과를 Chair에게 전달',
+    phase === 'anonymous_peer_review' || phase === 'chair_synthesis' ? 'active' : reviewCount === 5 ? 'complete' : 'idle',
+    'merge',
+  ));
 
   const chairEvents = events.filter((event) => (
     event.logicalRole === 'councilChair'
@@ -1128,16 +1267,22 @@ function renderPlanningCycleBody(container, events, phase) {
   ));
   const agentBusy = WORKFLOW_AGENT_PHASES.has(phase);
   const returning = WORKFLOW_RETURN_PHASES.has(phase);
+  const synthesisDone = finalEvents.some((event) => workflowArtifactType(event) === 'synthesis');
+  const workersStarted = ['claude', 'codex'].some((role) => workerEvents(role).length > 0);
   container.append(createWorkflowCycleNode({
     key: 'orchestrator',
     label: 'Orchestrator',
     caption: 'Harness · 과업 배분',
     glyph: 'O',
     events: topEvents,
-    state: agentBusy || returning ? 'complete' : WORKFLOW_TOP_PHASES.has(phase) ? 'active' : 'idle',
+    state: agentBusy || returning || topEvents.length ? 'complete' : WORKFLOW_TOP_PHASES.has(phase) ? 'active' : 'idle',
     accent: 'orchestrator-accent',
   }));
-  container.append(workflowConnector('두 Agent에게 병렬 전달', agentBusy));
+  container.append(workflowConnector(
+    '두 Agent에게 병렬 전달',
+    agentBusy ? 'active' : workersStarted || returning || synthesisDone ? 'complete' : 'idle',
+    'split',
+  ));
   const grid = document.createElement('div');
   grid.className = 'workflow-worker-grid';
   for (const [role, label, glyph] of [['claude', 'Claude', 'C'], ['codex', 'ChatGPT', 'G']]) {
@@ -1153,8 +1298,7 @@ function renderPlanningCycleBody(container, events, phase) {
       accent: role === 'claude' ? 'claude-accent' : 'codex-accent',
     }));
   }
-  container.append(grid, workflowConnector('Agent 결과 회수', returning));
-  const synthesisDone = finalEvents.some((event) => workflowArtifactType(event) === 'synthesis');
+  container.append(grid, workflowConnector('Agent 결과 회수', returning ? 'active' : synthesisDone ? 'complete' : 'idle', 'merge'));
   container.append(createWorkflowCycleNode({
     key: 'synthesis',
     label: 'Orchestrator 종합',
@@ -1175,12 +1319,21 @@ function renderWorkflowMetrics() {
     totals.calls += 1;
     totals.input += Number(usage.input_tokens ?? usage.inputTokens) || 0;
     totals.output += Number(usage.output_tokens ?? usage.outputTokens) || 0;
+    // 캐시 토큰도 실제 처리량·과금 대상이므로 합산한다(호출당 대부분을 차지할 수 있음).
+    totals.cache += (Number(usage.cache_creation_input_tokens ?? usage.cacheCreationInputTokens) || 0)
+      + (Number(usage.cache_read_input_tokens ?? usage.cacheReadInputTokens) || 0)
+      + (Number(usage.cached_input_tokens ?? usage.cachedInputTokens) || 0);
     totals.cost += Number(usage.total_cost_usd ?? usage.costUsd) || 0;
     return totals;
-  }, { calls: 0, input: 0, output: 0, cost: 0 });
+  }, { calls: 0, input: 0, output: 0, cache: 0, cost: 0 });
   const calls = Math.max(Number(serverTotals.calls) || 0, eventTotals.calls);
   const input = Math.max(Number(serverTotals.inputTokens) || 0, eventTotals.input);
   const output = Math.max(Number(serverTotals.outputTokens) || 0, eventTotals.output);
+  const serverCache = (Number(serverTotals.cacheCreationInputTokens) || 0)
+    + (Number(serverTotals.cacheReadInputTokens) || 0)
+    + (Number(serverTotals.cachedInputTokens) || 0);
+  const cache = Math.max(serverCache, eventTotals.cache);
+  const cost = Math.max(Number(serverTotals.costUsd) || 0, eventTotals.cost);
   const fallbacks = Math.max(
     Number(app.state?.modelRouting?.fallbackCount) || 0,
     app.workflowEvents.filter((event) => event.fallback).length,
@@ -1192,11 +1345,19 @@ function renderWorkflowMetrics() {
   ui.workflowMetrics.replaceChildren();
   [
     ['호출', calls],
-    ['토큰', input + output ? `${(input + output).toLocaleString()}` : '—'],
+    [
+      '토큰',
+      input + output + cache ? `${(input + output + cache).toLocaleString()}` : '—',
+      input + output + cache
+        ? `입력 ${input.toLocaleString()} · 출력 ${output.toLocaleString()} · 캐시 ${cache.toLocaleString()}`
+        : '이 세션에는 토큰 기록이 없습니다.',
+    ],
+    ['비용', cost ? `$${cost.toFixed(3)}` : '—'],
     ['Fallback', fallbacks],
     ['차단', circuits],
-  ].forEach(([label, value]) => {
+  ].forEach(([label, value, hint]) => {
     const item = document.createElement('span');
+    if (hint) item.title = hint;
     item.innerHTML = `${escapeHtml(label)} <strong>${escapeHtml(value)}</strong>`;
     ui.workflowMetrics.append(item);
   });
@@ -1238,8 +1399,17 @@ function renderWorkflowCycles() {
     const detail = document.createElement('details');
     detail.className = 'workflow-cycle';
     detail.dataset.cycle = String(cycleNumber);
-    detail.open = cycleNumber === currentCycle;
+    // 이 함수는 이벤트가 올 때마다 트리를 새로 만든다. 사용자가 직접 펼친 과거 Cycle은
+    // 그 선택을 유지해야 읽던 내용이 사라지지 않는다. 다만 "현재 Cycle이라 자동으로
+    // 열렸던 것"까지 기억하면 과거 Cycle이 영영 접히지 않으므로, 사용자가 직접 토글한
+    // 것만 override로 남긴다.
+    const override = app.workflowCycleOverrides.get(cycleNumber);
+    detail.open = override === undefined ? cycleNumber === currentCycle : override;
     const summary = document.createElement('summary');
+    // click은 사용자 조작에서만 발생한다(open 속성 대입은 click을 만들지 않는다).
+    summary.addEventListener('click', () => {
+      app.workflowCycleOverrides.set(cycleNumber, !detail.open);
+    });
     summary.innerHTML = `<span>Cycle ${cycleNumber}</span><strong>${escapeHtml(PHASE_LABELS[phase] || phase)}</strong><small>${events.length} events</small>`;
     const body = document.createElement('div');
     body.className = `workflow-cycle-body mode-${mode}`;
@@ -1267,11 +1437,25 @@ function renderWorkflowCycles() {
   renderWorkflowMetrics();
 }
 
+// renderWorkflowCycles는 모든 Cycle의 노드 트리를 통째로 다시 만든다.
+// setPhase와 recordWorkflowEvent가 이벤트 하나마다 각각 호출하므로, 배칭하지 않으면
+// 같은 틱에 두 번 이상 전체 재구축이 일어난다. 한 틱에 한 번으로 모은다.
+// (rAF는 탭이 백그라운드일 때 멈추므로 setTimeout을 쓴다.)
+let workflowRenderQueued = false;
+function scheduleWorkflowRender() {
+  if (workflowRenderQueued) return;
+  workflowRenderQueued = true;
+  setTimeout(() => {
+    workflowRenderQueued = false;
+    renderWorkflowCycles();
+  }, 0);
+}
+
 function recordWorkflowEvent(event) {
   if (!event || typeof event !== 'object') return;
   app.workflowEvents.push(event);
   app.workflowEvents = app.workflowEvents.slice(-1000);
-  renderWorkflowCycles();
+  scheduleWorkflowRender();
 }
 
 function workflowNodeState(element, state) {
@@ -1314,7 +1498,7 @@ function followWorkflowTarget(target = app.workflowTarget, immediate = false) {
   app.workflowFollowTimer = window.setTimeout(() => {
     const top = Math.max(0, element.offsetTop - ((ui.workflowViewport.clientHeight - element.offsetHeight) / 2));
     app.workflowProgrammaticScroll = true;
-    ui.workflowViewport.scrollTo({ top, behavior: immediate ? 'auto' : 'smooth' });
+    ui.workflowViewport.scrollTo({ top, behavior: immediate ? 'auto' : scrollBehavior() });
     window.setTimeout(() => { app.workflowProgrammaticScroll = false; }, immediate ? 50 : 550);
   }, immediate ? 0 : 70);
 }
@@ -1334,7 +1518,7 @@ function workflowPhaseMessage(phase, target) {
 function syncWorkflowPhase(value, immediate = false) {
   const phase = normalizePhase(value);
   if (!app.workflowReplay) {
-    renderWorkflowCycles();
+    scheduleWorkflowRender();
     followWorkflowTarget(phase, immediate);
   }
   return;
@@ -1385,14 +1569,47 @@ function syncWorkflowPhase(value, immediate = false) {
 }
 
 function setPhase(value) {
+  const previous = app.phase;
   app.phase = normalizePhase(value);
   ui.phasePill.dataset.phase = app.phase;
   ui.phasePill.textContent = PHASE_LABELS[app.phase] || app.phase;
   const busy = BUSY_PHASES.has(app.phase);
   ui.workspace.removeAttribute('aria-busy');
   ui.ticker.closest('.activity-panel')?.setAttribute('aria-busy', busy ? 'true' : 'false');
+  if (app.phase !== previous) app.phaseStartedAt = Date.now();
+  syncPhaseClock(busy);
   syncWorkflowPhase(app.phase);
+  syncArtifactFilterToPhase();
   updateControls();
+}
+
+// 대기 중 유일하게 "변하는 것"을 만든다. 회전 애니메이션은 prefers-reduced-motion에서
+// 꺼지므로, 축소 모션 사용자에게는 이 텍스트가 유일한 진행 신호가 된다.
+function renderPhaseClock() {
+  if (!ui.phaseElapsed) return;
+  const progress = phaseProgress(app.phase, app.state?.config?.mode);
+  const elapsed = app.phaseStartedAt ? formatElapsed(Date.now() - app.phaseStartedAt) : '';
+  const parts = [];
+  if (progress) parts.push(`단계 ${progress.step}/${progress.total}`);
+  if (elapsed) parts.push(elapsed);
+  ui.phaseElapsed.textContent = parts.join(' · ');
+  ui.phaseElapsed.hidden = !parts.length;
+}
+
+function syncPhaseClock(busy) {
+  if (app.phaseTimer) {
+    clearInterval(app.phaseTimer);
+    app.phaseTimer = null;
+  }
+  if (!busy) {
+    if (ui.phaseElapsed) {
+      ui.phaseElapsed.textContent = '';
+      ui.phaseElapsed.hidden = true;
+    }
+    return;
+  }
+  renderPhaseClock();
+  app.phaseTimer = setInterval(renderPhaseClock, 1000);
 }
 
 function updateMeta(source = {}) {
@@ -1546,16 +1763,19 @@ function updateControls() {
     ui.actionTitle.textContent = 'Council 실행 중';
     ui.actionDescription.textContent = '현재 단계를 마칠 때까지 입력이 잠깁니다.';
     ui.inputLabel.textContent = '입력 잠김';
+    ui.input.placeholder = '현재 단계가 끝나면 입력할 수 있습니다.';
     setSendButtonLabel('실행 중', '…');
   } else if (failed) {
     ui.actionTitle.textContent = app.phase === 'interrupted' ? '실행 중단' : '실행 실패';
     ui.actionDescription.textContent = '완료된 결과를 보존한 채 실패 단계부터 재시도할 수 있습니다.';
     ui.inputLabel.textContent = '입력 잠김';
+    ui.input.placeholder = '재시도하거나 새 세션을 시작하세요.';
     setSendButtonLabel('입력 불가', '×');
   } else if (terminal) {
     ui.actionTitle.textContent = decisionCouncil ? 'Council 판단 승인 완료' : 'MVP 기획 루프 완료';
     ui.actionDescription.textContent = '새로운 작업은 새 세션으로 시작하세요.';
     ui.inputLabel.textContent = '승인 완료';
+    ui.input.placeholder = '승인된 세션입니다. 새 세션에서 이어가세요.';
     setSendButtonLabel('완료', '✓');
   } else if (feedbackPhase || app.feedbackMode) {
     ui.actionTitle.textContent = app.requiredQuestions.length
@@ -1582,7 +1802,11 @@ function updateControls() {
   if (!busy && app.harnessDirty.size) {
     ui.sendBtn.disabled = true;
     ui.actionTitle.textContent = 'Harness 저장 필요';
-    ui.actionDescription.textContent = '오른쪽에서 수정한 Harness를 저장하면 다음 지시부터 적용됩니다.';
+    // 좁은 화면에서는 인스펙터 패널이 display:none + inert라 "오른쪽"이 존재하지
+    // 않는다. 전송이 잠긴 이유를 찾을 수 없게 되므로 화면 폭에 맞는 경로를 안내한다.
+    ui.actionDescription.textContent = isMobileWorkspace()
+      ? '저장하지 않은 Harness 수정이 있습니다. 인사이트 탭에서 저장하면 다음 지시부터 적용됩니다.'
+      : '오른쪽 패널에서 수정한 Harness를 저장하면 다음 지시부터 적용됩니다.';
     setSendButtonLabel('Harness를 먼저 저장하세요', '•');
   }
   updateHarnessHistoryControls();
@@ -1907,6 +2131,25 @@ function normalizeHarness(raw, role) {
     updatedBy: textFrom(value.updatedBy || value.updated_by || value.author || ''),
     reason: textFrom(value.reason || value.changeReason || value.change_reason || ''),
   };
+}
+
+// SSE로 재연결하면 과거 harness 이벤트가 모두 리플레이된다. 이벤트 하나마다 전체
+// 상태를 다시 받던 탓에 초기 로드에서만 /api/state(실측 565KB)가 12번 오갔다.
+// 하네스 전용 엔드포인트(13KB)로 좁히고, 리플레이 버스트는 한 번으로 합친다.
+let harnessRefreshQueued = false;
+function scheduleHarnessRefresh() {
+  if (harnessRefreshQueued) return;
+  harnessRefreshQueued = true;
+  setTimeout(() => {
+    harnessRefreshQueued = false;
+    requestJson('/api/harnesses').then((payload) => {
+      if (app.state && payload?.harnesses) {
+        app.state.harnesses = payload.harnesses;
+        if (payload.revision !== undefined) app.state.harnessRevision = payload.revision;
+      }
+      renderHarnesses(payload, false);
+    }).catch(() => {});
+  }, 0);
 }
 
 function extractHarnesses(source = {}) {
@@ -2425,23 +2668,374 @@ function structuredNode(value) {
   return paragraph;
 }
 
+const ARTIFACT_TYPE_LABELS = {
+  harness_set: '작업 Harness',
+  task_package: '워커 과업 명세',
+  draft: '기획 초안',
+  critique: '교차 비평',
+  revision: '개정안',
+  synthesis: '통합 기획안',
+  decision_frame: '의사결정 프레임',
+  advisor_analysis: '독립 분석',
+  peer_review: '익명 동료평가',
+  council_verdict: 'Council 최종 판단',
+  council_reports: 'Council 보고서',
+  council_clarification: '확인 질문',
+};
+
+const ARTIFACT_ROLE_LABELS = {
+  orchestrator: 'Orchestrator',
+  claude: 'Claude 워커',
+  codex: 'ChatGPT 워커',
+  claudeWorker: 'Claude 워커',
+  codexWorker: 'ChatGPT 워커',
+  councilFramer: 'Council Framer',
+  councilChair: 'Council Chair',
+};
+
+const INTERNAL_ARTIFACT_KEYS = new Set(['schemaVersion', 'artifactType', 'type', 'planVersion', 'cycle', 'author', 'perspective']);
+
+function canonicalArtifactType(value) {
+  return String(value || '').trim().replace(/([a-z])([A-Z])/g, '$1_$2').replace(/[\s-]+/g, '_').toLowerCase();
+}
+
+function displayArtifactType(value) {
+  const type = canonicalArtifactType(value);
+  return ARTIFACT_TYPE_LABELS[type] || (type ? type.replace(/_/g, ' ') : '결과');
+}
+
+function artifactRoleKey(event = {}) {
+  if (event.logicalRole) return event.logicalRole;
+  return ({ claude: 'claudeWorker', codex: 'codexWorker' }[event.role] || event.role || 'orchestrator');
+}
+
+function displayArtifactRole(role) {
+  if (ARTIFACT_ROLE_LABELS[role]) return ARTIFACT_ROLE_LABELS[role];
+  if (String(role).startsWith('councilAdvisor:')) return 'Council Advisor';
+  if (String(role).startsWith('councilReviewer:')) return 'Council Reviewer';
+  return String(role || '실행 기록');
+}
+
+function displayModelRoute(route = {}) {
+  const provider = route.brain === 'codex' ? 'ChatGPT (Codex)' : route.brain === 'claude' ? 'Claude' : route.brain;
+  return [provider, route.model, route.effort ? `effort ${route.effort}` : ''].filter(Boolean).join(' · ');
+}
+
+function routeForArtifact(event, artifactType) {
+  if (event?.modelRoute && typeof event.modelRoute === 'object') return { route: event.modelRoute, source: 'event' };
+  const targetType = canonicalArtifactType(artifactType);
+  const targetRole = artifactRoleKey(event);
+  const records = Array.isArray(app.state?.modelRouting?.latest) ? app.state.modelRouting.latest : [];
+  const eventTime = Date.parse(event?.timestamp || event?.t || event?.time || '');
+  const candidates = records.filter((record) => (
+    canonicalArtifactType(record.artifactType) === targetType && record.role === targetRole
+  ));
+  if (!candidates.length) return null;
+  const closest = [...candidates].sort((left, right) => {
+    if (!Number.isFinite(eventTime)) return Date.parse(right.at || 0) - Date.parse(left.at || 0);
+    return Math.abs(Date.parse(left.at || 0) - eventTime) - Math.abs(Date.parse(right.at || 0) - eventTime);
+  })[0];
+  const delta = Number.isFinite(eventTime) ? Math.abs(Date.parse(closest.at || 0) - eventTime) : 0;
+  return !Number.isFinite(delta) || delta <= 15 * 60_000 ? { route: closest, source: 'routing' } : null;
+}
+
+function configuredRouteForArtifact(event) {
+  const role = artifactRoleKey(event);
+  const config = app.state?.config || {};
+  const route = config[role];
+  return route?.brain && route?.model ? route : null;
+}
+
+function isCouncilAnonymityActive(artifactType) {
+  const activePhase = ['framing', 'independent_analysis', 'anonymous_peer_review'].includes(app.phase);
+  return activePhase && ['advisor_analysis', 'peer_review'].includes(canonicalArtifactType(artifactType));
+}
+
+function appendProvenanceChip(container, label, value, tone = '') {
+  const chip = document.createElement('span');
+  chip.className = `artifact-provenance-chip${tone ? ` ${tone}` : ''}`;
+  const key = document.createElement('strong');
+  key.textContent = label;
+  const text = document.createElement('span');
+  text.textContent = value;
+  chip.append(key, text);
+  container.append(chip);
+}
+
+function renderArtifactProvenance(container, event, artifactType) {
+  container.replaceChildren();
+  if (isCouncilAnonymityActive(artifactType)) {
+    appendProvenanceChip(container, '익명성', '상호평가 완료 후 출처 공개', 'is-private');
+    return;
+  }
+  const routeInfo = routeForArtifact(event, artifactType);
+  const configured = configuredRouteForArtifact(event);
+  appendProvenanceChip(container, '작성', displayArtifactRole(artifactRoleKey(event)));
+  if (routeInfo?.route) {
+    appendProvenanceChip(container, routeInfo.source === 'event' ? '실행 모델' : '실행 기록', displayModelRoute(routeInfo.route));
+  } else if (configured) {
+    appendProvenanceChip(container, '설정 모델', displayModelRoute(configured), 'is-muted');
+  } else {
+    appendProvenanceChip(container, '모델 기록', '이전 실행 기록에 없음', 'is-muted');
+  }
+  const type = canonicalArtifactType(artifactType);
+  if (!['synthesis', 'council_verdict'].includes(type)) return;
+  const contributors = ['claudeWorker', 'codexWorker']
+    .map((role) => {
+      const record = [...(app.state?.modelRouting?.latest || [])].reverse().find((entry) => entry.role === role);
+      return record?.brain && record?.model ? `${displayArtifactRole(role)} · ${displayModelRoute(record)}` : '';
+    })
+    .filter(Boolean);
+  if (contributors.length) appendProvenanceChip(container, '통합 참고', contributors.join(' / '), 'is-contributors');
+}
+
+function createOutcomeSection(title, className = '') {
+  const section = document.createElement('section');
+  section.className = `outcome-section${className ? ` ${className}` : ''}`;
+  const heading = document.createElement('h4');
+  heading.textContent = title;
+  section.append(heading);
+  return section;
+}
+
+function addNarrativeSection(container, title, value, { markdownValue = false } = {}) {
+  if (!textFrom(value).trim()) return false;
+  const section = createOutcomeSection(title, 'outcome-narrative');
+  const body = document.createElement('div');
+  body.className = 'outcome-copy';
+  if (markdownValue) body.innerHTML = markdown(value);
+  else body.textContent = textFrom(value);
+  section.append(body);
+  container.append(section);
+  return true;
+}
+
+function addStringListSection(container, title, values, limit = 5) {
+  if (!Array.isArray(values) || !values.length) return false;
+  const section = createOutcomeSection(title);
+  const list = document.createElement('ul');
+  list.className = 'outcome-list';
+  values.slice(0, limit).forEach((value) => {
+    const item = document.createElement('li');
+    item.textContent = textFrom(value);
+    list.append(item);
+  });
+  section.append(list);
+  if (values.length > limit) {
+    const more = document.createElement('p');
+    more.className = 'outcome-more';
+    more.textContent = `추가 ${values.length - limit}개 항목은 읽기 모드에서 확인하세요.`;
+    section.append(more);
+  }
+  container.append(section);
+  return true;
+}
+
+function addDecisionSection(container, values, limit = 5) {
+  if (!Array.isArray(values) || !values.length) return false;
+  const section = createOutcomeSection('핵심 결정');
+  const list = document.createElement('ol');
+  list.className = 'outcome-list outcome-decisions';
+  values.slice(0, limit).forEach((entry) => {
+    const item = document.createElement('li');
+    const head = document.createElement('div');
+    head.className = 'outcome-item-head';
+    const topic = document.createElement('strong');
+    topic.textContent = textFrom(entry?.topic || entry?.title || '결정');
+    head.append(topic);
+    if (entry?.status) {
+      const status = document.createElement('span');
+      status.className = `outcome-status is-${String(entry.status).toLowerCase()}`;
+      status.textContent = ({ decided: '확정', provisional: '잠정', open: '검토 필요' }[entry.status] || entry.status);
+      head.append(status);
+    }
+    item.append(head);
+    const decision = textFrom(entry?.decision || entry?.recommendation || entry?.value);
+    if (decision) {
+      const text = document.createElement('p');
+      text.textContent = decision;
+      item.append(text);
+    }
+    const rationale = textFrom(entry?.rationale || entry?.evidence);
+    if (rationale) {
+      const note = document.createElement('p');
+      note.className = 'outcome-note';
+      note.textContent = `근거 · ${rationale}`;
+      item.append(note);
+    }
+    list.append(item);
+  });
+  section.append(list);
+  if (values.length > limit) {
+    const more = document.createElement('p');
+    more.className = 'outcome-more';
+    more.textContent = `추가 ${values.length - limit}개 결정은 읽기 모드에서 확인하세요.`;
+    section.append(more);
+  }
+  container.append(section);
+  return true;
+}
+
+function addObjectListSection(container, title, values, fields, limit = 5) {
+  if (!Array.isArray(values) || !values.length) return false;
+  const section = createOutcomeSection(title);
+  const list = document.createElement('ul');
+  list.className = 'outcome-list outcome-object-list';
+  values.slice(0, limit).forEach((entry) => {
+    const item = document.createElement('li');
+    const headline = textFrom(entry?.[fields.headline] || entry?.title || entry?.name || entry);
+    const strong = document.createElement('strong');
+    strong.textContent = headline;
+    item.append(strong);
+    fields.details.forEach(({ key, label }) => {
+      const value = textFrom(entry?.[key]);
+      if (!value) return;
+      const detail = document.createElement('p');
+      detail.className = key === 'impact' || key === 'rationale' ? 'outcome-note' : '';
+      detail.textContent = `${label} · ${value}`;
+      item.append(detail);
+    });
+    list.append(item);
+  });
+  section.append(list);
+  if (values.length > limit) {
+    const more = document.createElement('p');
+    more.className = 'outcome-more';
+    more.textContent = `추가 ${values.length - limit}개 항목은 읽기 모드에서 확인하세요.`;
+    section.append(more);
+  }
+  container.append(section);
+  return true;
+}
+
+function renderOutcome(artifact, artifactType, { expanded = false } = {}) {
+  const body = document.createElement('div');
+  body.className = 'outcome-body';
+  if (typeof artifact === 'string') {
+    addNarrativeSection(body, '결과', artifact, { markdownValue: true });
+    return body;
+  }
+  if (!artifact || typeof artifact !== 'object') {
+    addNarrativeSection(body, '결과', String(artifact ?? ''));
+    return body;
+  }
+  const type = canonicalArtifactType(artifactType || artifact.artifactType);
+  const limit = expanded ? Number.MAX_SAFE_INTEGER : 4;
+  let rendered = false;
+  const narrative = (title, value, options) => { rendered = addNarrativeSection(body, title, value, options) || rendered; };
+  const strings = (title, values) => { rendered = addStringListSection(body, title, values, limit) || rendered; };
+  const objects = (title, values, fields) => { rendered = addObjectListSection(body, title, values, fields, limit) || rendered; };
+
+  if (['synthesis', 'council_verdict'].includes(type)) {
+    narrative('핵심 요약', artifact.executiveSummary || artifact.recommendation || artifact.summary);
+    addDecisionSection(body, artifact.decisions, limit); rendered ||= Array.isArray(artifact.decisions) && artifact.decisions.length > 0;
+    strings('위원회 합의', artifact.whereCouncilAgrees);
+    strings('의견 충돌', artifact.whereCouncilClashes);
+    strings('발견된 사각지대', artifact.blindSpots);
+    narrative('최종 권고', artifact.recommendation);
+    narrative('가장 먼저 할 일', artifact.firstAction);
+    objects('다음 행동', artifact.nextActions, { headline: 'action', details: [{ key: 'when', label: '시점' }, { key: 'outcome', label: '기대 결과' }] });
+    objects('주요 리스크', artifact.risks, { headline: 'risk', details: [{ key: 'severity', label: '심각도' }, { key: 'trigger', label: '신호' }, { key: 'mitigation', label: '대응' }] });
+    objects('검증 기준', artifact.validationPlan, { headline: 'criterion', details: [{ key: 'passCondition', label: '통과 기준' }, { key: 'owner', label: '책임' }, { key: 'method', label: '방법' }] });
+    objects('확인할 질문', artifact.requiredQuestions, { headline: 'question', details: [{ key: 'impact', label: '영향' }] });
+    objects('선택 질문', artifact.optionalQuestions, { headline: 'question', details: [{ key: 'impact', label: '영향' }] });
+  } else if (['draft', 'revision'].includes(type)) {
+    narrative('핵심 요약', artifact.summary);
+    addDecisionSection(body, artifact.decisions, limit); rendered ||= Array.isArray(artifact.decisions) && artifact.decisions.length > 0;
+    strings('요구사항 반영', artifact.requirementCoverage);
+    objects('주요 리스크', artifact.risks, { headline: 'risk', details: [{ key: 'severity', label: '심각도' }, { key: 'mitigation', label: '대응' }] });
+    objects('확인할 질문', artifact.questions, { headline: 'question', details: [{ key: 'impact', label: '영향' }] });
+  } else if (type === 'critique') {
+    narrative('검토 판정', artifact.verdict === 'accept' ? '수용 가능' : artifact.verdict === 'revise' ? '개정 필요' : artifact.verdict);
+    strings('강점', artifact.strengths);
+    objects('개선이 필요한 항목', artifact.issues, { headline: 'description', details: [{ key: 'severity', label: '심각도' }, { key: 'recommendation', label: '권고' }] });
+    strings('누락 요구사항', artifact.missingRequirementIds);
+  } else if (type === 'decision_frame') {
+    narrative('결정할 사안', artifact.decision);
+    strings('선택지', artifact.options);
+    strings('제약 조건', artifact.constraints);
+    strings('현재 근거', artifact.evidence);
+    narrative('추가 확인', artifact.clarifyingQuestion);
+  } else if (type === 'advisor_analysis') {
+    narrative('결론', artifact.headline || artifact.recommendation);
+    narrative('검토 내용', artifact.assessment);
+    narrative('권고', artifact.recommendation);
+    narrative('첫 행동', artifact.firstAction);
+    strings('핵심 위험', artifact.keyRisks);
+  } else if (type === 'peer_review') {
+    narrative('가장 강한 분석', artifact.strongestWhy);
+    narrative('가장 큰 사각지대', artifact.biggestBlindSpotWhy);
+    narrative('공통 누락', artifact.allMissed);
+  } else if (type === 'task_package') {
+    narrative('목표', artifact.objective);
+    const deliverable = artifact.deliverable;
+    if (deliverable && typeof deliverable === 'object') {
+      narrative('기대 산출물', [deliverable.kind, deliverable.audience, deliverable.format, deliverable.scope].filter(Boolean).join(' · '));
+    }
+    strings('요구사항', artifact.requirements);
+    strings('제약 조건', artifact.constraints);
+    strings('완료 기준', artifact.acceptanceCriteria);
+  } else {
+    narrative('핵심 요약', artifact.executiveSummary || artifact.summary || artifact.assessment || artifact.recommendation || artifact.headline);
+    strings('권고', artifact.recommendations || artifact.nextActions);
+  }
+
+  if (artifact.planMarkdown) {
+    if (expanded) narrative('상세 실행계획', artifact.planMarkdown, { markdownValue: true });
+    else {
+      const hint = document.createElement('p');
+      hint.className = 'outcome-reader-hint';
+      hint.textContent = '상세 실행계획과 전체 검증 표는 읽기 모드에서 확인할 수 있습니다.';
+      body.append(hint);
+      rendered = true;
+    }
+  }
+  if (!rendered) {
+    const fallback = Object.entries(artifact)
+      .filter(([key, value]) => !INTERNAL_ARTIFACT_KEYS.has(key) && (typeof value === 'string' || Array.isArray(value)))
+      .slice(0, 4);
+    fallback.forEach(([key, value]) => {
+      if (Array.isArray(value)) strings(key.replace(/([A-Z])/g, ' $1'), value);
+      else narrative(key.replace(/([A-Z])/g, ' $1'), value);
+    });
+  }
+  return body;
+}
+
 function artifactTitle(event, kind, artifact) {
   if (typeof artifact === 'object' && artifact) {
-    return textFrom(artifact.title || artifact.name || artifact.artifactType || artifact.type || artifact.schema)
-      || (kind === 'checkpoint' ? '통합 1차 기획안' : '구조화 산출물');
+    return textFrom(artifact.title || artifact.name || artifact.headline)
+      || displayArtifactType(event.artifactType || event.artifact_type || artifact.artifactType || artifact.type || kind);
   }
   const labels = {
     checkpoint: '통합 1차 기획안', evaluation: '기획안 평가', task_package: '워커 과업 명세',
     draft_artifact: '기획 초안', critique_artifact: '교차 비평', revision_artifact: '개정안',
     synthesis_artifact: '통합 기획안', plan: '통합 기획안',
   };
-  return labels[kind] || event.title || '구조화 산출물';
+  return labels[kind] || event.title || '결과';
+}
+
+function openArtifactReader(event, kind, artifact, artifactType) {
+  const title = artifactTitle(event, kind, artifact);
+  ui.artifactReaderType.textContent = displayArtifactType(artifactType);
+  ui.artifactReaderTitle.textContent = title;
+  ui.artifactReaderMeta.textContent = metaValues(event).join(' · ');
+  renderArtifactProvenance(ui.artifactReaderProvenance, event, artifactType);
+  ui.artifactReaderBody.replaceChildren(renderOutcome(artifact, artifactType, { expanded: true }));
+  ui.artifactReaderRaw.replaceChildren(structuredNode(artifact));
+  if (typeof ui.artifactReader.showModal === 'function') {
+    if (!ui.artifactReader.open) ui.artifactReader.showModal();
+  } else {
+    ui.artifactReader.setAttribute('open', '');
+  }
 }
 
 function renderArtifact(event, kind, rawArtifact) {
   if (rawArtifact === undefined || rawArtifact === null || rawArtifact === '') return;
   const artifact = sanitizePublic(rawArtifact);
-  const key = hash(stableStringify({ artifact, cycle: event.cycle, version: event.planVersion || event.plan_version }));
+  // 동일 결과는 생성 완료 이벤트와 승인 체크포인트에서 다시 전달될 수 있다.
+  // 업무 결과 목록에서는 같은 Cycle의 동일 본문을 한 번만 보여준다.
+  const key = hash(stableStringify({ artifact, cycle: event.cycle }));
   if (app.renderedArtifacts.has(key)) return;
   app.renderedArtifacts.add(key);
 
@@ -2457,6 +3051,7 @@ function renderArtifact(event, kind, rawArtifact) {
   card.open = ['checkpoint', 'plan', 'synthesis_artifact'].includes(kind)
     || artifact?.artifactType === 'synthesis';
   const header = document.createElement('summary');
+  header.className = 'artifact-card-summary';
   const title = document.createElement('h3');
   title.textContent = artifactTitle(event, kind, artifact);
   const meta = document.createElement('div');
@@ -2466,7 +3061,20 @@ function renderArtifact(event, kind, rawArtifact) {
     span.textContent = value;
     meta.append(span);
   }
-  header.append(title, meta);
+  const provenance = document.createElement('div');
+  provenance.className = 'artifact-provenance';
+  renderArtifactProvenance(provenance, event, artifactType);
+  header.append(title, meta, provenance);
+
+  const actions = document.createElement('div');
+  actions.className = 'artifact-actions';
+  const openReader = document.createElement('button');
+  openReader.className = 'button ghost compact';
+  openReader.type = 'button';
+  openReader.textContent = '전체 폭으로 읽기';
+  openReader.setAttribute('aria-label', `${artifactTitle(event, kind, artifact)} 전체 폭으로 읽기`);
+  openReader.addEventListener('click', () => openArtifactReader(event, kind, artifact, artifactType));
+  actions.append(openReader);
 
   const body = document.createElement('div');
   body.className = 'artifact-body';
@@ -2476,7 +3084,8 @@ function renderArtifact(event, kind, rawArtifact) {
     materialized = true;
     body.replaceChildren();
     if (typeof artifact === 'string') body.innerHTML = markdown(artifact);
-    else body.append(structuredNode(artifact));
+    else body.append(renderOutcome(artifact, artifactType));
+    applyReadMore(body, actions);
   };
   if (card.open) materialize();
   else {
@@ -2486,8 +3095,15 @@ function renderArtifact(event, kind, rawArtifact) {
     body.append(hint);
     card.addEventListener('toggle', () => { if (card.open) materialize(); }, { once: true });
   }
-  card.append(header, body);
+  card.append(header, actions, body);
   ui.artifactList.append(card);
+  // 메시지 패널과 달리 이 목록에는 상한이 없어 세션이 길어질수록 계속 쌓였다.
+  // 오래된 카드부터 덜어내되, 필터 안내 문단은 건드리지 않는다.
+  let cards = ui.artifactList.querySelectorAll('.artifact-card');
+  while (cards.length > ARTIFACT_CARD_LIMIT) {
+    cards[0].remove();
+    cards = ui.artifactList.querySelectorAll('.artifact-card');
+  }
   ui.artifactSection.classList.remove('hidden');
   updateCount('artifact');
   applyArtifactFilter();
@@ -2495,18 +3111,58 @@ function renderArtifact(event, kind, rawArtifact) {
 
 function applyArtifactFilter() {
   const filter = ui.artifactFilter?.value || 'final';
-  [...ui.artifactList.children].forEach((card) => {
+  const cards = [...ui.artifactList.children].filter((el) => el.classList.contains('artifact-card'));
+  let visibleCount = 0;
+  cards.forEach((card) => {
     const visible = filter === 'all'
       || (filter === 'current' && Number(card.dataset.cycle) === Number(app.cycle))
       || (filter === 'final' && card.dataset.finalArtifact === 'true');
     card.classList.toggle('hidden', !visible);
+    if (visible) visibleCount += 1;
   });
+  // 헤더 카운트가 전체 개수만 보여주면 필터에 가려진 산출물이 없는 것처럼 읽힌다.
+  if (ui.artifactCount) {
+    ui.artifactCount.textContent = visibleCount === cards.length
+      ? String(cards.length)
+      : `${visibleCount} / ${cards.length}`;
+  }
+  // 필터 결과가 비었을 때 안내가 없으면 "결과가 사라졌다"로 오인된다.
+  let empty = ui.artifactList.querySelector('.artifact-filter-empty');
+  if (!visibleCount && cards.length) {
+    if (!empty) {
+      empty = document.createElement('p');
+      empty.className = 'empty-state artifact-filter-empty';
+      ui.artifactList.append(empty);
+    }
+    empty.textContent = filter === 'final'
+      ? `아직 최종 결과가 없습니다. 진행 중인 초안·검토 ${cards.length}건을 보려면 표시 범위를 '현재 Cycle'이나 '전체 기록'으로 바꾸세요.`
+      : '현재 표시 범위에 해당하는 산출물이 없습니다.';
+    empty.classList.remove('hidden');
+  } else if (empty) {
+    empty.classList.add('hidden');
+  }
+}
+
+// 실행 중에는 최종 결과가 아직 없다. 사용자가 직접 고른 적이 없다면 진행 중 산출물이
+// 보이는 범위로 옮긴다. (기본값 'final'이면 drafting 내내 빈 화면만 보인다)
+function syncArtifactFilterToPhase() {
+  if (!ui.artifactFilter || app.artifactFilterTouched) return;
+  const busy = BUSY_PHASES.has(app.phase);
+  const next = busy ? 'current' : 'final';
+  if (ui.artifactFilter.value === next) return;
+  if (busy || ui.artifactFilter.value === 'current') {
+    ui.artifactFilter.value = next;
+    applyArtifactFilter();
+  }
 }
 
 function addActivity(event, text) {
   const content = textFrom(text).trim();
   if (!content) return;
-  setTicker(content, false);
+  // 재연결하면 서버가 과거 이벤트를 전부 replay한다. 이미 끝난 세션에서 그 백로그가
+  // 티커를 덮으면 "승인 완료" pill 옆에 옛 진행 메시지가 남아 서로 모순된다.
+  // 실행 중일 때만 진행 문구로 갱신하고, 그 외에는 상태 문구를 지킨다.
+  if (BUSY_PHASES.has(app.phase)) setTicker(content, false);
   const key = event.fallback || event.circuit
     ? `exception:${event.id || hash(content)}`
     : `${event.cycle || 0}:${event.phase || ''}:${event.logicalRole || event.role || ''}:${event.artifactType || ''}`;
@@ -2550,10 +3206,7 @@ function handleEvent(event, messageEvent = null) {
   const declaredArtifactType = String(event.artifactType || event.artifact_type || '').toLowerCase();
 
   if (kind === 'config' && declaredArtifactType.includes('harness')) {
-    requestJson('/api/state').then((latest) => {
-      app.state = latest;
-      renderHarnesses(latest, false);
-    }).catch(() => {});
+    scheduleHarnessRefresh();
   }
 
   if (kind === 'error' || kind === 'run.failed' || kind === 'run_failed') {
@@ -2639,6 +3292,30 @@ function resetRendered() {
   ['orchestrator', 'claude', 'codex'].forEach(renderRoleSummary);
 }
 
+// 지금 이 세션이 무엇을 만들고 있는지 한 줄로 세운다.
+// 세션 제목은 첫 지시문의 앞부분이라 산출물이 드러나지 않는 경우가 많다
+// (예: "추가 필수 질문 답변: [Q-VALUE] …"). 기획안 제목이 실제 목표물을 담고
+// 있으므로 그것을 우선 쓰고, 아직 없을 때만 세션 제목으로 물러선다.
+function renderSessionHeadline(state = {}) {
+  if (!ui.sessionHeadline) return;
+  const plan = state.currentPlan || state.current_plan || {};
+  const objective = textFrom(plan.title).trim() || textFrom(state.sessionTitle).trim();
+  if (!objective) {
+    ui.sessionHeadline.hidden = true;
+    return;
+  }
+  ui.sessionHeadlineTitle.textContent = objective;
+  const phase = PHASE_LABELS[normalizePhase(state.phase)] || state.phase || '';
+  const cycle = Number(state.cycle) || 0;
+  const version = plan.planVersion ?? state.planVersion;
+  ui.sessionHeadlineMeta.textContent = [
+    cycle ? `Cycle ${cycle}` : '',
+    version ? `Plan v${version}` : '',
+    phase,
+  ].filter(Boolean).join(' · ');
+  ui.sessionHeadline.hidden = false;
+}
+
 function renderState(state, reset = true) {
   const priorSessionId = app.activeSessionId;
   const nextSessionId = state.sessionId || state.session_id || state.sessionKey || priorSessionId;
@@ -2652,6 +3329,7 @@ function renderState(state, reset = true) {
   app.workflowReplay = true;
   setPhase(state.phase || state.status || 'ready');
   updateMeta(state);
+  renderSessionHeadline(state);
   applyArtifactFilter();
   const questions = extractQuestions(state);
   renderQuestions(questions.required, questions.optional);
@@ -2861,6 +3539,26 @@ function renderSessions(sessions = [], activeSessionId = app.activeSessionId) {
     archiveButton.setAttribute('aria-label', `${session.title} ${session.archivedAt ? '복원' : '보관'}`);
     actions.append(renameButton, archiveButton);
 
+    // 순서 이동은 '순서 수정' 모드에서만 노출한다. 목록은 세션을 열어도 재배치되지
+    // 않으므로, 순서를 바꾸는 유일한 경로가 이 버튼이다.
+    const order = document.createElement('div');
+    order.className = 'session-order rail-label';
+    const moveUp = document.createElement('button');
+    moveUp.type = 'button';
+    moveUp.className = 'session-action session-move';
+    moveUp.textContent = '↑';
+    moveUp.setAttribute('aria-label', `${session.title} 위로 이동`);
+    moveUp.disabled = index === 0;
+    const moveDown = document.createElement('button');
+    moveDown.type = 'button';
+    moveDown.className = 'session-action session-move';
+    moveDown.textContent = '↓';
+    moveDown.setAttribute('aria-label', `${session.title} 아래로 이동`);
+    moveDown.disabled = index === normalized.length - 1;
+    moveUp.addEventListener('click', () => moveSession(session.id, 'up', moveUp));
+    moveDown.addEventListener('click', () => moveSession(session.id, 'down', moveDown));
+    order.append(moveUp, moveDown);
+
     const editor = document.createElement('form');
     editor.className = 'session-rename rail-label hidden';
     const input = document.createElement('input');
@@ -2899,7 +3597,7 @@ function renderSessions(sessions = [], activeSessionId = app.activeSessionId) {
       updateSessionMetadata(session, { archived: !session.archivedAt }, archiveButton);
     });
 
-    item.append(button, actions, editor);
+    item.append(button, actions, order, editor);
     ui.sessionList.append(item);
   });
 }
@@ -2953,6 +3651,28 @@ async function updateSessionMetadata(session, changes, button) {
         ? '세션을 복원했습니다.'
         : '세션 이름을 변경했습니다.');
   }).catch(async () => { await loadSessions(); });
+}
+
+// 목록 순서 변경. 활성 세션은 바뀌지 않으므로 실행 중에도 안전하다.
+async function moveSession(sessionId, direction, button) {
+  await performAction(button, async () => {
+    const payload = await post(`/api/sessions/${encodeURIComponent(sessionId)}/move`, { direction });
+    if (Array.isArray(payload.sessions)) renderSessions(payload.sessions, app.activeSessionId);
+    else await loadSessions();
+    // 재렌더로 사라진 버튼 대신, 같은 세션의 같은 방향 버튼으로 초점을 되돌린다.
+    const moved = ui.sessionList.querySelector(`[data-session-id="${CSS.escape(sessionId)}"]`);
+    const again = moved?.querySelectorAll('.session-move')[direction === 'up' ? 0 : 1];
+    if (again && !again.disabled) again.focus();
+  }).catch(() => {});
+}
+
+function setSessionOrderMode(enabled) {
+  app.sessionOrderMode = Boolean(enabled);
+  document.body.dataset.sessionOrder = app.sessionOrderMode ? 'edit' : 'locked';
+  ui.sessionOrderToggle?.setAttribute('aria-pressed', String(app.sessionOrderMode));
+  if (ui.sessionOrderToggle) {
+    ui.sessionOrderToggle.textContent = app.sessionOrderMode ? '순서 완료' : '순서 수정';
+  }
 }
 
 async function activateSession(sessionId) {
@@ -3037,6 +3757,15 @@ function setMobileWorkspaceView(view, { focusPanel = false, persist = true } = {
     ui.inspectorPanel.removeAttribute('aria-hidden');
     ui.conversationPanel.inert = false;
     ui.inspectorPanel.inert = false;
+    // >880px에서는 탭바가 display:none이라 tablist가 존재하지 않는다. tabpanel
+    // 역할만 남으면 고아가 되고, aria-labelledby가 우선해 우측 패널이 "인사이트"로
+    // 읽힌다. 데스크톱에서는 역할을 걷어내고 원래 라벨을 되돌린다.
+    [ui.conversationPanel, ui.inspectorPanel, ui.sessionRail].forEach((panel) => {
+      if (!panel) return;
+      panel.removeAttribute('role');
+      panel.removeAttribute('aria-labelledby');
+      if (panel.dataset.desktopLabel) panel.setAttribute('aria-label', panel.dataset.desktopLabel);
+    });
     return;
   }
 
@@ -3046,6 +3775,14 @@ function setMobileWorkspaceView(view, { focusPanel = false, persist = true } = {
   const sessionsOpen = next === 'sessions';
   const chatOpen = next === 'chat';
   const insightsOpen = next === 'insights';
+  // 데스크톱에서 걷어낸 tab 역할을 되돌린다. 세션 레일은 탭 3개 중 유일하게
+  // 대응 tabpanel이 없어 aria-controls가 가리킬 곳이 없었다.
+  ui.conversationPanel?.setAttribute('role', 'tabpanel');
+  ui.conversationPanel?.setAttribute('aria-labelledby', 'mobileChatTab');
+  ui.inspectorPanel?.setAttribute('role', 'tabpanel');
+  ui.inspectorPanel?.setAttribute('aria-labelledby', 'mobileInsightsTab');
+  ui.sessionRail.setAttribute('role', 'tabpanel');
+  ui.sessionRail.setAttribute('aria-labelledby', 'mobileSessionsTab');
   ui.sessionRail.classList.toggle('is-expanded-mobile', sessionsOpen);
   ui.sessionRail.classList.remove('is-collapsed');
   ui.sessionRail.setAttribute('aria-hidden', String(!sessionsOpen));
@@ -3126,7 +3863,7 @@ function openNewSessionSetup() {
   ui.toggleSetup.textContent = '설정 접기';
   loadModelCapacity({ force: !app.modelCapacity }).catch(() => {});
   startModelCapacityPolling();
-  ui.toggleSetup.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  ui.toggleSetup.scrollIntoView({ behavior: scrollBehavior(), block: 'center' });
   ui.orcBrain.focus({ preventScroll: true });
 }
 
@@ -3406,10 +4143,32 @@ ui.applyRecommended?.addEventListener('click', () => {
   updateConfigSummary();
   setTicker('최신 모델 기준의 권장 라우팅을 적용했습니다.');
 });
-ui.artifactFilter?.addEventListener('change', applyArtifactFilter);
+ui.artifactFilter?.addEventListener('change', () => {
+  // 사용자가 직접 고른 범위는 단계 전환이 덮어쓰지 않는다.
+  app.artifactFilterTouched = true;
+  applyArtifactFilter();
+});
+ui.closeArtifactReader?.addEventListener('click', () => {
+  if (typeof ui.artifactReader.close === 'function') ui.artifactReader.close();
+  else ui.artifactReader.removeAttribute('open');
+});
+ui.artifactReader?.addEventListener('click', (event) => {
+  if (event.target !== ui.artifactReader) return;
+  if (typeof ui.artifactReader.close === 'function') ui.artifactReader.close();
+  else ui.artifactReader.removeAttribute('open');
+});
+// 예전에는 다른 동작이 showError('')를 부를 때까지 배너를 치울 방법이 없었다.
+ui.globalErrorDismiss?.addEventListener('click', () => showError(''));
+
+ui.sessionOrderToggle?.addEventListener('click', () => setSessionOrderMode(!app.sessionOrderMode));
+setSessionOrderMode(false);
+
 ui.workflowFollow?.addEventListener('click', () => {
-  setWorkflowFollow(true);
-  followWorkflowTarget(app.workflowTarget, true);
+  // aria-pressed 토글 버튼인데 항상 true로 두면 눌린 상태를 해제할 수 없다.
+  // (이전에는 wheel/touch 같은 숨은 제스처로만 끌 수 있었다)
+  const next = !app.workflowFollowEnabled;
+  setWorkflowFollow(next);
+  if (next) followWorkflowTarget(app.workflowTarget, true);
 });
 ui.workflowViewport?.addEventListener('wheel', () => setWorkflowFollow(false), { passive: true });
 ui.workflowViewport?.addEventListener('touchstart', () => setWorkflowFollow(false), { passive: true });

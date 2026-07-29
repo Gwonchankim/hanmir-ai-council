@@ -148,6 +148,20 @@ async function main() {
   }
 }
 
-if (require.main === module) main();
+// 실패는 반드시 종료 코드로 드러나야 한다. process.exitCode만으로는 정리 단계에
+// 남은 핸들·삼켜진 예외 때문에 exit 0으로 끝나는 경우가 있어 명시적으로 종료한다.
+function runAsScript(entry) {
+  const fail = (error) => {
+    process.stderr.write(`${error?.stack || error}\n`);
+    process.exit(1);
+  };
+  process.on('unhandledRejection', fail);
+  process.on('uncaughtException', fail);
+  entry()
+    .then(() => process.exit(process.exitCode || 0))
+    .catch(fail);
+}
+
+if (require.main === module) runAsScript(main);
 
 module.exports = { assertResult, route };

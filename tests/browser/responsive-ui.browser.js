@@ -389,6 +389,77 @@ async function verifyComposerToggle(client) {
   assert.equal(expanded.focused, true, 'expanding should make the input immediately ready to use');
 }
 
+async function verifyResultPresentation(client) {
+  await client.evaluate(`handleEvent({
+    id: 'result-presentation-fixture',
+    type: 'artifact',
+    role: 'orchestrator',
+    phase: 'synthesizing',
+    cycle: 9,
+    planVersion: 9,
+    artifactType: 'synthesis',
+    modelRoute: { brain: 'codex', model: 'gpt-5.4', effort: 'high' },
+    artifact: {
+      schemaVersion: 1,
+      artifactType: 'synthesis',
+      title: '결과 표현 검증용 통합안',
+      executiveSummary: '경영진이 바로 판단할 수 있도록 결과 중심으로 정리합니다.',
+      decisions: [{ topic: '진입 순서', decision: '파일럿 검증을 먼저 진행한다.', rationale: '증거 공백을 줄인다.', status: 'decided' }],
+      nextActions: [{ action: '파일럿 범위를 확정한다.', when: '이번 주', outcome: '검증 계획 승인' }],
+      risks: [{ risk: '고객 검증 지연', severity: 'high', trigger: '인터뷰 일정 미확정', mitigation: '대체 고객 후보 확보' }],
+      planMarkdown: '## 상세 실행계획\\n\\n- Gate 1을 진행합니다.',
+    },
+  })`);
+  await poll(
+    () => client.evaluate("[...document.querySelectorAll('.artifact-card')].some((card) => card.textContent.includes('결과 표현 검증용 통합안'))"),
+    { timeout: 5_000, message: 'result presentation fixture was not rendered' },
+  );
+  const presentation = await client.evaluate(`(() => {
+    const card = [...document.querySelectorAll('.artifact-card')]
+      .find((item) => item.textContent.includes('결과 표현 검증용 통합안'));
+    return {
+      sectionTitle: document.querySelector('#artifactTitle')?.textContent,
+      text: card?.textContent || '',
+      modelSource: card?.querySelector('.artifact-provenance')?.textContent || '',
+      readerButton: card?.querySelector('.artifact-actions button')?.textContent || '',
+      horizontalOverflow: document.documentElement.scrollWidth > innerWidth + 1,
+    };
+  })()`);
+  assert.equal(presentation.sectionTitle, '결과 검토');
+  assert.match(presentation.text, /핵심 요약/);
+  assert.match(presentation.text, /핵심 결정/);
+  assert.match(presentation.text, /다음 행동/);
+  assert.doesNotMatch(presentation.text, /schemaVersion/);
+  assert.doesNotMatch(presentation.text, /artifactType/);
+  assert.match(presentation.modelSource, /ChatGPT \(Codex\).*gpt-5\.4.*effort high/);
+  assert.equal(presentation.readerButton, '전체 폭으로 읽기');
+  assert.equal(presentation.horizontalOverflow, false);
+
+  await client.evaluate(`(() => {
+    const card = [...document.querySelectorAll('.artifact-card')]
+      .find((item) => item.textContent.includes('결과 표현 검증용 통합안'));
+    card?.querySelector('.artifact-actions button')?.click();
+  })()`);
+  const reader = await client.evaluate(`(() => {
+    const dialog = document.querySelector('#artifactReader');
+    const rect = dialog.getBoundingClientRect();
+    return {
+      open: dialog.open,
+      width: rect.width,
+      viewport: innerWidth,
+      body: document.querySelector('#artifactReaderBody')?.textContent || '',
+      rawOpen: document.querySelector('.artifact-raw')?.open,
+    };
+  })()`);
+  assert.equal(reader.open, true);
+  assert.ok(reader.width >= reader.viewport * .7, 'reader should use a substantially wider reading surface');
+  assert.match(reader.body, /상세 실행계획/);
+  assert.equal(reader.rawOpen, false, 'raw schema data must remain opt-in');
+  await client.evaluate("document.querySelector('#closeArtifactReader').click()");
+  const closed = await client.evaluate("document.querySelector('#artifactReader').open");
+  assert.equal(closed, false);
+}
+
 async function verifyLongStreamOverflow(client) {
   await poll(
     () => client.evaluate(`document.querySelector('#orchestratorMessages')?.textContent.includes(${JSON.stringify('LONG_SSE_')})`),
@@ -459,6 +530,17 @@ async function verifyWorkflowVisualization(client) {
       codexState: cycle.querySelector('[data-workflow-node="codex"]').dataset.workflowState,
       borderAnimation: getComputedStyle(claude, '::before').animationName,
       flowing: cycle.querySelectorAll('.workflow-cycle-connector.is-flowing').length,
+      splitConnectors: cycle.querySelectorAll('.workflow-cycle-connector.is-split').length,
+      mergeConnectors: cycle.querySelectorAll('.workflow-cycle-connector.is-merge').length,
+      splitPaths: cycle.querySelectorAll('.workflow-cycle-connector.is-split .workflow-connector-flow').length,
+      mergePaths: cycle.querySelectorAll('.workflow-cycle-connector.is-merge .workflow-connector-flow').length,
+      // 화살촉은 쓰지 않는다. SVG 마커는 preserveAspectRatio="none"의 비등방 스케일에
+      // 눌려 찌그러지고, CSS 삼각형은 선과 이음새가 떠 보였다. 선만으로 잇는다.
+      svgMarkerArrows: cycle.querySelectorAll('.workflow-connector-flow[marker-end]').length,
+      cssArrowTips: cycle.querySelectorAll('.workflow-connector-tip').length,
+      // 선이 노드 경계까지 닿아야 연결이 끊겨 보이지 않는다.
+      pathEndsAtNode: [...cycle.querySelectorAll('.workflow-connector-flow')]
+        .every((path) => /V 100$/.test(path.getAttribute('d'))),
       modelText: cycle.textContent,
       followLabel: document.querySelector('#workflowFollowLabel').textContent,
       followPressed: document.querySelector('#workflowFollow').getAttribute('aria-pressed'),
@@ -471,6 +553,13 @@ async function verifyWorkflowVisualization(client) {
   assert.equal(state.claudeState, 'active');
   assert.equal(state.codexState, 'active');
   assert.ok(state.flowing >= 1);
+  assert.equal(state.splitConnectors, 1, 'Orchestrator dispatch should render as an explicit split');
+  assert.equal(state.mergeConnectors, 1, 'agent return should render as an explicit merge');
+  assert.equal(state.splitPaths, 3, 'split connector needs smooth routes to both workers plus a mobile fallback');
+  assert.equal(state.mergePaths, 3, 'merge connector needs smooth routes from both workers plus a mobile fallback');
+  assert.equal(state.svgMarkerArrows, 0, 'connectors must not regress to distortion-prone SVG marker arrowheads');
+  assert.equal(state.cssArrowTips, 0, 'connectors are drawn as lines only, with no arrowhead');
+  assert.equal(state.pathEndsAtNode, true, 'connector lines must reach the node edge so the link never looks detached');
   assert.match(state.borderAnimation, /workflow-border-counterclockwise/);
   assert.match(state.modelText, /Claude · haiku/);
   assert.match(state.modelText, /ChatGPT · gpt-5.4/);
@@ -572,7 +661,7 @@ async function verifyWorkflowVisualization(client) {
     label: document.querySelector('#workflowFollowLabel').textContent,
   }))()`);
   assert.equal(follow.pressed, 'false', 'manual workflow scrolling must pause auto-follow');
-  assert.match(follow.label, /현재 단계로 이동/);
+  assert.match(follow.label, /자동 추적 꺼짐/);
 
   await client.evaluate("document.querySelector('#workflowFollow').click()");
   follow = await client.evaluate(`(() => ({
@@ -580,7 +669,19 @@ async function verifyWorkflowVisualization(client) {
     label: document.querySelector('#workflowFollowLabel').textContent,
   }))()`);
   assert.equal(follow.pressed, 'true');
-  assert.match(follow.label, /자동 추적/);
+  assert.match(follow.label, /자동 추적 켜짐/);
+
+  // aria-pressed 토글은 눌린 상태를 해제할 수 있어야 한다.
+  // (예전에는 클릭이 항상 true로만 설정해 버튼으로는 끌 수 없었다)
+  await client.evaluate("document.querySelector('#workflowFollow').click()");
+  follow = await client.evaluate(`(() => ({
+    pressed: document.querySelector('#workflowFollow').getAttribute('aria-pressed'),
+    label: document.querySelector('#workflowFollowLabel').textContent,
+  }))()`);
+  assert.equal(follow.pressed, 'false', 'clicking a pressed toggle must turn auto-follow off');
+  assert.match(follow.label, /자동 추적 꺼짐/);
+
+  await client.evaluate("document.querySelector('#workflowFollow').click()");
 }
 
 async function verifyDisclosureAccessibility(client) {
@@ -999,6 +1100,11 @@ test('responsive browser regression at 375/768/1440px', { timeout: 120_000 }, as
         });
       }
     }
+
+    await t.test('result cards prioritize business outcomes, provenance, and wide reading', async () => {
+      await setViewportAndNavigate(client, server.baseUrl, { width: 1440, height: 900 });
+      await verifyResultPresentation(client);
+    });
 
     await t.test('collapsible controls expose keyboard and ARIA state', async () => {
       await setViewportAndNavigate(client, server.baseUrl, { width: 1440, height: 900 });

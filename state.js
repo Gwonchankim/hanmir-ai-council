@@ -36,13 +36,15 @@ function now() { return new Date().toISOString(); }
 function inferSessionTitle(source, fallback = 'New AI Council session') {
   if (source?.sessionTitle && source.sessionTitle !== 'New AI Council session') return source.sessionTitle;
   if (source?.title && source.title !== 'New AI Council session') return source.title;
-  const instruction = source?.lastInstruction
-    || (Array.isArray(source?.transcript)
-      ? [...source.transcript].reverse().find((event) => event?.role === 'user')?.message
-      : null);
-  return instruction
-    ? String(instruction).replace(/\s+/g, ' ').trim().slice(0, 80)
-    : fallback;
+  // 세션 제목은 "그 세션이 무엇을 하려던 것인가"이므로 최신 피드백이 아니라
+  // 최초 지시를 쓴다. (reverse()를 쓰면 제목이 마지막 피드백으로 덮인다.)
+  const firstUserMessage = Array.isArray(source?.transcript)
+    ? source.transcript.find((event) => event?.role === 'user')?.message
+    : null;
+  const instruction = firstUserMessage || source?.lastInstruction;
+  if (!instruction) return fallback;
+  const normalized = String(instruction).replace(/\s+/g, ' ').trim();
+  return normalized.length > 48 ? `${normalized.slice(0, 47)}…` : normalized;
 }
 
 function atomicWriteJson(filePath, value) {
@@ -151,6 +153,10 @@ function defaultState(sessionConfig = config.cloneDefaults()) {
     },
     harnessUserOverlays: { orchestrator: {}, claudeWorker: {}, codexWorker: {} },
     harnessHistory: [],
+    // snapshot()이 호출될 때마다 증가하는 단조 카운터. per-session 파일과
+    // legacy data/session.json 중 어느 쪽이 더 최근에 완료된 snapshot()
+    // 호출을 반영하는지 재시작 시 판별하는 데 쓴다.
+    snapshotSeq: 0,
     createdAt,
     updatedAt: createdAt,
   };
@@ -281,15 +287,59 @@ class StateStore {
     });
   }
 
+  // snapshot()은 per-session 파일 -> registry -> legacy session.json 순으로
+  // 개별 atomic write를 한다. 그 사이에 프로세스가 죽으면 legacy 파일이 옛
+  // 내용으로 남을 수 있으므로, 두 파일 중 실제로 더 최근에 "완료"된
+  // snapshot() 호출을 반영하는 쪽을 snapshotSeq(동률이면 updatedAt)로 고른다.
+  _snapshotRecency(filePath) {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+      return {
+        seq: Math.max(0, Number(parsed?.snapshotSeq) || 0),
+        updatedAt: Date.parse(parsed?.updatedAt || '') || 0,
+        parsed,
+      };
+    } catch (_) {
+      return { seq: -1, updatedAt: -1, parsed: null };
+    }
+  }
+
+  _resolveLoadSource() {
+    const legacyExists = fs.existsSync(this.snapshotPath);
+    const perSessionPath = this.registryActiveId ? this._snapshotFile(this.registryActiveId) : null;
+    const perSessionExists = Boolean(perSessionPath && fs.existsSync(perSessionPath));
+    if (!legacyExists) return perSessionExists ? { path: perSessionPath } : null;
+    if (!perSessionExists || perSessionPath === this.snapshotPath) return { path: this.snapshotPath };
+    const perSession = this._snapshotRecency(perSessionPath);
+    // 레지스트리가 가리키는 파일이 실제로 그 세션의 것인지 먼저 확인한다
+    // (레지스트리 손상 대비). 신뢰할 수 없으면 legacy로 안전하게 되돌아간다.
+    if (!perSession.parsed || perSession.parsed.sessionKey !== this.registryActiveId) {
+      return { path: this.snapshotPath };
+    }
+    const legacy = this._snapshotRecency(this.snapshotPath);
+    // legacy가 registryActiveId와 "같은 세션"을 담고 있을 때만 신선도를
+    // 비교한다. activateSession()은 세션을 전환하는 도중 registry가 아직
+    // 갱신되기 전에 legacy 파일에 다른(전환 대상) 세션의 내용을 의도적으로
+    // 먼저 써 두고 load()가 그것을 그대로 읽기를 기대한다 -- 그 경우
+    // legacy.sessionKey는 registryActiveId(옛 활성 세션)와 다르므로, 옛
+    // 활성 세션의 per-session 파일로 되돌리지 않고 legacy를 그대로 신뢰한다.
+    if (!legacy.parsed || legacy.parsed.sessionKey !== this.registryActiveId) {
+      return { path: this.snapshotPath };
+    }
+    const perSessionIsNewer = perSession.seq !== legacy.seq
+      ? perSession.seq > legacy.seq
+      : perSession.updatedAt > legacy.updatedAt;
+    return perSessionIsNewer ? { path: perSessionPath } : { path: this.snapshotPath };
+  }
+
   load() {
     this._loadRegistry();
-    if (!fs.existsSync(this.snapshotPath)) {
-      const recoveryPath = this.registryActiveId ? this._snapshotFile(this.registryActiveId) : null;
-      if (recoveryPath && fs.existsSync(recoveryPath)) {
-        atomicWriteJson(this.snapshotPath, JSON.parse(fs.readFileSync(recoveryPath, 'utf8')));
-      } else {
-        return this.state;
-      }
+    const source = this._resolveLoadSource();
+    if (!source) return this.state;
+    if (source.path !== this.snapshotPath) {
+      // per-session 스냅샷이 더 최근이다 -- crash 시점과 무관하게 가장 최근
+      // 커밋된 상태로 복원되도록 legacy 파일을 즉시 같은 내용으로 치유한다.
+      atomicWriteJson(this.snapshotPath, JSON.parse(fs.readFileSync(source.path, 'utf8')));
     }
     try {
       const parsed = JSON.parse(fs.readFileSync(this.snapshotPath, 'utf8'));
@@ -334,6 +384,7 @@ class StateStore {
           && !Array.isArray(parsed.routeSessions) ? parsed.routeSessions : {},
         routeHealth: parsed.routeHealth && typeof parsed.routeHealth === 'object'
           && !Array.isArray(parsed.routeHealth) ? parsed.routeHealth : {},
+        snapshotSeq: Math.max(0, Number(parsed.snapshotSeq) || 0),
         sessionAudit: Array.isArray(parsed.sessionAudit)
           ? parsed.sessionAudit.filter((entry) => entry && typeof entry === 'object')
             .slice(-config.limits.sessionAuditEntries)
@@ -583,11 +634,36 @@ class StateStore {
     if (!this.state || !this.state.sessionKey) return;
     const metadata = this._metadataForCurrentSession();
     const index = this.registry.findIndex((entry) => (entry.id || entry.sessionKey) === metadata.id);
+    // 목록 순서는 사용자가 소유한다. updatedAt으로 다시 정렬하면 세션을 열기만 해도
+    // 그 세션이 맨 위로 튀어 목록이 계속 재배치된다. 기존 항목은 제자리에서
+    // 갱신하고, 새 세션만 맨 앞에 넣는다. 순서 변경은 moveSession()으로만 한다.
     if (index >= 0) this.registry[index] = metadata;
-    else this.registry.push(metadata);
-    this.registry = this.registry
-      .sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')))
-      .slice(0, config.limits.sessionRegistryEntries);
+    else this.registry.unshift(metadata);
+    this.registry = this.registry.slice(0, config.limits.sessionRegistryEntries);
+  }
+
+  // 목록에서 세션을 한 칸 위/아래로 옮긴다. 경계에서는 아무 일도 하지 않는다.
+  moveSession(sessionKey, direction) {
+    const id = String(sessionKey || '');
+    const step = direction === 'up' ? -1 : 1;
+    if (direction !== 'up' && direction !== 'down') {
+      const error = new Error('이동 방향은 up 또는 down이어야 합니다.');
+      error.status = 400;
+      throw error;
+    }
+    this._syncSessionRegistry();
+    const index = this.registry.findIndex((entry) => (entry.id || entry.sessionKey) === id);
+    if (index < 0) {
+      const error = new Error(`세션을 찾을 수 없습니다: ${id}`);
+      error.status = 404;
+      throw error;
+    }
+    const target = index + step;
+    if (target < 0 || target >= this.registry.length) return this.listSessions({ scope: 'all' });
+    const [entry] = this.registry.splice(index, 1);
+    this.registry.splice(target, 0, entry);
+    this._writeRegistry();
+    return this.listSessions({ scope: 'all' });
   }
 
   listSessions({ q = '', scope = 'active' } = {}) {
@@ -723,7 +799,7 @@ class StateStore {
     this.registry[index] = {
       ...this.registry[index], title, archivedAt, metadataVersion, updatedAt,
     };
-    this.registry = this.registry.sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')));
+    // 이름 변경·보관도 목록 순서를 건드리지 않는다(순서는 moveSession 전용).
     this._writeRegistry();
     return this.sessionMetadata(id);
   }
@@ -1184,6 +1260,8 @@ class StateStore {
     this.touch();
   }
 
+  // 특정 CLI 세션이 주어진 하네스 digest를 이미 전달받았는지 확인한다.
+  // 세션 ID 자체가 키이므로 새 세션·fork·복구는 자동으로 미스가 된다.
   touch() {
     this.state.updatedAt = now();
     this._syncSessionRegistry();
@@ -1191,6 +1269,11 @@ class StateStore {
 
   snapshot() {
     this._syncSessionRegistry();
+    // 단조 카운터: per-session 파일과 legacy session.json이 같은 호출에서
+    // 동일한 seq로 쓰인다. 재시작 시 두 파일 중 하나가 이전 호출의 옛
+    // 내용으로 남아 있으면(비원자적 3-파일 쓰기) load()가 이 값으로 더
+    // 최근에 완료된 쪽을 가려낸다.
+    this.state.snapshotSeq = Math.max(0, Number(this.state.snapshotSeq) || 0) + 1;
     const serializable = { ...this.state };
     delete serializable.sessionRegistry;
     atomicWriteJson(this._snapshotFile(this.state.sessionKey), serializable);

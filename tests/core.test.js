@@ -127,6 +127,7 @@ function synthesis(version, requiredQuestion = false, feedback = false) {
 function fakeBrain(options = {}) {
   const calls = [];
   let codexDraftFailures = 0;
+  let claudeCritiqueFailures = 0;
   const fn = async ({ prompt, session, schema, signal }) => {
     const kind = schema.$id;
     const author = prompt.includes("author는 반드시 'claude'") ? 'claude'
@@ -148,6 +149,14 @@ function fakeBrain(options = {}) {
     }
     if (kind === 'Draft' && author === 'claude' && options.failCodexDraftOnce) {
       await new Promise((resolve) => setTimeout(resolve, 1));
+    }
+    // Fails the claudeWorker's resumed critique call once with an error that
+    // is NOT fallback-eligible (no rate-limit/quota/etc keyword), so the
+    // stuck-session cleanup path in engine.js's catch block is exercised
+    // instead of the fallback path.
+    if (options.failClaudeCritiqueOnce && kind === 'Critique' && reviewer === 'claude'
+      && claudeCritiqueFailures++ === 0) {
+      throw new Error('claudeWorker critique process crashed unexpectedly');
     }
 
     let value;
@@ -188,15 +197,28 @@ test('R0→R1 수렴 시 R2를 생략하고 승인 대기 상태가 된다', asy
   assert.equal(store.get().planVersion, 1);
   assert.equal(brain.calls[0].kind, 'HarnessSet');
   assert.equal(store.currentCycle().harnessRevision, store.get().harnessRevision);
-  assert.ok(brain.calls.filter((call) => call.kind !== 'HarnessSet')
-    .every((call) => call.prompt.includes('AI_COUNCIL_ROLE_HARNESS_')));
+
+  // 모든 역할 호출은 매번 하네스 전문을 싣는다. 재전송을 줄이려면 "CLI 세션
+  // 컨텍스트에 아직 남아 있다"고 가정해야 하는데, 그 가정은 검증할 수 없고
+  // 증거 게이트(CF_HARNESS_PROTOCOL)가 요구하는 digest 증거도 사라진다.
+  const nonHarnessCalls = brain.calls.filter((call) => call.kind !== 'HarnessSet');
+  assert.ok(nonHarnessCalls.every((call) => call.prompt.includes('AI_COUNCIL_ROLE_HARNESS_')));
+  const seenRole = new Set();
+  for (const call of nonHarnessCalls) {
+    seenRole.add(call.key);
+    assert.match(call.prompt, /AI_COUNCIL_ROLE_HARNESS_[0-9a-f]{24}_BEGIN/);
+  }
+  assert.equal(seenRole.size, 3);
+
   const persistedBindings = store.get().sessionAudit
     .filter((entry) => entry.artifactType !== 'harnessSet')
     .map((entry) => entry.promptBinding);
   assert.ok(persistedBindings.length > 0);
-  assert.ok(persistedBindings.every((binding) => binding?.included
-    && binding.harnessDigest === binding.promptHarnessDigest
-    && binding.harnessDigest.length === 64));
+  // 모든 역할 호출이 하네스 전문을 실으므로 binding은 전부 included여야 하고,
+  // digest와 promptHarnessDigest가 일치해야 감사 추적이 성립한다.
+  assert.ok(persistedBindings.every((binding) => binding?.harnessDigest?.length === 64));
+  assert.ok(persistedBindings.every((binding) => binding.included === true));
+  assert.ok(persistedBindings.every((binding) => binding.harnessDigest === binding.promptHarnessDigest));
   assert.doesNotMatch(JSON.stringify(persistedBindings), /Active task harness|시장진입/);
   assert.equal(brain.calls.filter((call) => call.kind === 'Revision').length, 0);
   assert.equal(store.get().currentEvaluation.passed, true);
@@ -266,6 +288,37 @@ test('실패한 병렬 단계는 완료 결과를 보존하고 실패 역할만 
   assert.equal(store.get().phase, 'awaiting_approval');
   assert.equal(brain.calls.filter((call) => call.kind === 'Draft' && call.key === 'claude').length, 1);
   assert.equal(brain.calls.filter((call) => call.kind === 'Draft' && call.key === 'codex').length, 2);
+});
+
+test('resume에 쓰인 세션이 폴백 불가 오류로 실패하면 재시도는 새 세션으로 시작한다', async (t) => {
+  const store = fixtureStore(t);
+  const brain = fakeBrain({ failClaudeCritiqueOnce: true });
+  const engine = new PlanningEngine({ store, brainCaller: brain });
+  await engine.runPlanning('세션 폐기 회귀 테스트').promise;
+
+  assert.equal(store.get().phase, 'failed');
+  assert.ok(store.currentCycle().artifacts.claudeDraft);
+  assert.equal(store.currentCycle().artifacts.claudeCritique, undefined);
+
+  // The Draft call resumed with no prior session and set both the
+  // route-scoped and legacy session fields for claudeWorker. The failed
+  // Critique resume attempt (a non-fallback-eligible error) must discard
+  // that stuck session ID -- otherwise retry() would resume with the same
+  // bad ID and repeat the exact same failure forever.
+  const primaryRouteKey = 'claude:sonnet:medium';
+  assert.equal(store.get().routeSessions.claudeWorker?.[primaryRouteKey], undefined);
+  assert.equal(store.get().sessions.claudeWorker, null);
+
+  await engine.retry().promise;
+  assert.equal(store.get().phase, 'awaiting_approval');
+
+  const claudeCritiqueCalls = brain.calls.filter((call) => call.kind === 'Critique' && call.key === 'claude');
+  assert.equal(claudeCritiqueCalls.length, 2);
+  assert.equal(claudeCritiqueCalls[0].resumed, true);
+  assert.equal(claudeCritiqueCalls[1].resumed, false);
+  // 재개하든 새 세션으로 시작하든 두 시도 모두 하네스 전문을 싣는다.
+  assert.match(claudeCritiqueCalls[0].prompt, /AI_COUNCIL_ROLE_HARNESS_[0-9a-f]{24}_BEGIN/);
+  assert.match(claudeCritiqueCalls[1].prompt, /AI_COUNCIL_ROLE_HARNESS_[0-9a-f]{24}_BEGIN/);
 });
 
 test('retry는 저장된 checkpoint를 재검증하고 변조된 worker artifact부터 재생성한다', async (t) => {
