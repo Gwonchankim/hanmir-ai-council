@@ -136,6 +136,12 @@ function synthesize({
     '한쪽 결과를 그대로 복사하지 말고 양측에서 채택한 내용, 충돌 해결, 지휘자가 직접 수정한 내용을 integration에 추적한다.',
     'planMarkdown은 승인 후 후속 제작자가 추가 추정 없이 착수할 수 있도록 범위, 구조/목차, 단계별 입력·산출물·담당, 결정 기준, 일정, 위험, 검증 증거를 포함하되 9,000자 이내로 압축한다.',
     '필수 정보가 하나라도 미해결이면 requiredQuestions에 넣고 status=needs_input으로 한다.',
+    // "미해결"의 범위를 좁힌다. 사용자가 "아직 확정 못 한다"고 답하는 것도 정당한
+    // 답변인데, 값을 못 받았다는 이유로 같은 질문을 계속 필수로 올리면 세션이
+    // 영원히 승인 대기에 갇힌다(실측: 같은 원가 질문으로 3개 cycle 소진).
+    // 정보를 지우는 게 아니라 담는 형태를 바꾼다.
+    '사용자가 해당 정보를 기밀·미합의·보류·특정 시점까지 잠금으로 명시해 답한 항목은 미해결로 보지 않는다. 그 항목은 requiredQuestions에서 제외하되, 반드시 assumptions에 현재 전제로 남기고 validationPlan에 확정 시점과 담당을 명시해 추적을 유지한다.',
+    '같은 정보를 이전 cycle에서 이미 질문했고 사용자가 답했다면, 값이 확정값이 아니더라도 동일 질문을 requiredQuestions에 다시 올리지 않는다.',
     'requiredQuestions가 비어 있을 때만 status=ready_for_approval로 한다. 선택 질문은 승인 차단 사유가 아니다.',
     '모든 원자 요구사항을 requirementTraceability에서 covered/partial/blocked로 근거와 함께 추적한다.',
     'measurableTargets에는 보고서 목표 페이지, 검증 기간(일), 주요 분석 모듈을 구조화한다. 해당하지 않는 숫자는 0으로 둔다.',
